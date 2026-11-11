@@ -1,0 +1,155 @@
+# Location: neko-overlays-plugin/.github/workflows/build.yml
+# File: build.yml
+#
+# Builds the plugin for Windows and Linux on GitHub's own machines, so no Windows PC is needed.
+#   - every push and pull request: builds both and keeps the zips as downloadable artifacts
+#   - a tag like v0.2.0: also publishes a GitHub release with both zips and checksums
+#
+# One-time setup: add the Twitch Client ID as a repository secret called NEKO_TWITCH_CLIENT_ID
+# (Settings > Secrets and variables > Actions). It is built into the plugin, the same as .env does locally.
+
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      obs_version:
+        description: "OBS Studio version to build against (headers, and obs.dll on Windows)"
+        required: false
+
+permissions:
+  contents: read
+
+env:
+  # Use the oldest OBS you want to support: a plugin built against newer headers than the OBS running it can be
+  # refused. Override once with the "Run workflow" button, or for good with a repository variable called OBS_VERSION.
+  OBS_VERSION: ${{ inputs.obs_version || vars.OBS_VERSION || '32.2.1' }}
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-x64
+            os: windows-2022
+            built: neko_overlays_plugin.dll
+            plugin: neko-overlays-plugin.dll
+          - name: linux-x86_64
+            os: ubuntu-22.04 # an older Ubuntu on purpose: the .so then runs on more distributions
+            built: libneko_overlays_plugin.so
+            plugin: neko-overlays-plugin.so
+    env:
+      NEKO_TWITCH_CLIENT_ID: ${{ secrets.NEKO_TWITCH_CLIENT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: A release needs the Twitch Client ID
+        if: startsWith(github.ref, 'refs/tags/v') && env.NEKO_TWITCH_CLIENT_ID == ''
+        shell: bash
+        run: |
+          echo "::error::The NEKO_TWITCH_CLIENT_ID secret is empty. Add it under Settings > Secrets and variables > Actions, then run the tag build again."
+          exit 1
+
+      - name: The tag has to match the version in Cargo.toml
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          version=$(grep -m1 '^version' Cargo.toml | sed -E 's/^version *= *"([^"]+)".*/\1/')
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::The tag is $GITHUB_REF_NAME but Cargo.toml says version $version"
+            exit 1
+          fi
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # --- Windows: Visual Studio tools on the PATH, the OBS headers, and obs.lib ---
+      - name: Visual Studio tools
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: OBS SDK (headers and obs.lib)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/obs-sdk.ps1 -Version $env:OBS_VERSION
+
+      # bindgen needs libclang and the clang that goes with it. Visual Studio has its own, older clang on the PATH,
+      # and mixing the two gives "invalid conversion between vector type" errors. So name both explicitly.
+      - name: LLVM for bindgen
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
+          echo "CLANG_PATH=C:\Program Files\LLVM\bin\clang.exe" >> $env:GITHUB_ENV
+
+      # --- Linux: only the OBS headers (OBS itself provides libobs when it loads the plugin) ---
+      - name: OBS headers
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-14 libclang-14-dev libsimde-dev
+          # the runner has several LLVM versions: use one libclang and its own clang, so their headers match
+          echo "LIBCLANG_PATH=/usr/lib/llvm-14/lib" >> "$GITHUB_ENV"
+          echo "CLANG_PATH=/usr/lib/llvm-14/bin/clang" >> "$GITHUB_ENV"
+          git clone --quiet --depth 1 --branch "$OBS_VERSION" --filter=blob:none --sparse https://github.com/obsproject/obs-studio.git .obs-sdk/obs-studio
+          git -C .obs-sdk/obs-studio sparse-checkout set libobs
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Package
+        shell: bash
+        run: |
+          version=$(grep -m1 '^version' Cargo.toml | sed -E 's/^version *= *"([^"]+)".*/\1/')
+          mkdir -p dist/neko-overlays-plugin/bin/64bit
+          cp "target/release/${{ matrix.built }}" "dist/neko-overlays-plugin/bin/64bit/${{ matrix.plugin }}"
+          cp README.md LICENSE dist/neko-overlays-plugin/
+          echo "ZIP=neko-overlays-plugin-$version-${{ matrix.name }}.zip" >> "$GITHUB_ENV"
+
+      - name: Zip (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path dist/neko-overlays-plugin -DestinationPath "dist/$env:ZIP"
+
+      - name: Zip (Linux)
+        if: runner.os == 'Linux'
+        run: cd dist && zip -qr "$ZIP" neko-overlays-plugin
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: neko-overlays-plugin-${{ matrix.name }}
+          path: dist/${{ env.ZIP }}
+          if-no-files-found: error
+
+  release:
+    name: publish the release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # to create the release
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        run: cd dist && sha256sum *.zip > SHA256SUMS.txt
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          flags="--generate-notes"
+          case "$GITHUB_REF_NAME" in *-*) flags="$flags --prerelease" ;; esac
+          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "neko-overlays-plugin $GITHUB_REF_NAME" $flags

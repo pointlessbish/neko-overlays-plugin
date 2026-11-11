@@ -1,0 +1,9 @@
+// FILE: infobar.scss  |  LOCATION: neko-overlays/src/styles/infobar/infobar.scss
+// The info bar overlay (/b/<token>). Structure in _bar.scss, looks in _themes.scss: the same two files as pointlessbish.wtf's /overlay
+// (leave those two alone, they must stay identical in both projects). _neko.scss is neko-overlays only: the styles that exist on alerts
+// and chat but not on the website's bar, and the palette alignments.
+@use 'bar';
+@use 'themes';
+@use 'neko'; // it overrides the terminal defaults
+@use 'void'; // the void14 styles (pill, fish, ocean, holo, halo)
+@use 'finals'; // THE FINALS

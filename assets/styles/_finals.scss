@@ -1,0 +1,77 @@
+// FILE: _finals.scss  |  LOCATION: neko-overlays/src/styles/infobar/_finals.scss
+// THE FINALS info bar, copied from the game's party widget (the "+", the level 185 and the "7 players" boxes): no bar behind it, just
+// separate square tiles of dark frosted glass with a small gap between them. White icons, italic capitals, the numbers in yellow, and
+// the train as the thin yellow underline along the bottom on a dark glass track.
+// Note: a browser source in OBS is transparent, so the blur cannot see the stream behind it; the tint and the soft highlight below carry
+// the glass look on their own, and the blur only shows where the page itself has something behind the bar (the dashboard preview).
+#info-bar[data-theme='finals'] {
+  --background-color: #1a2233; // the tint of the glass
+  --accent-color: #2cc4ff; // team cyan (not used by the tiles themselves)
+  --text-color: #ffffff;
+  --text-accent-color: #f9ee1d; // the numbers
+  --icon-color: var(--text-color);
+  --train-color: var(--text-accent-color); // the yellow underline of the game; use var(--accent-color) for team cyan
+  --font: 'Barlow Condensed', 'Arial Narrow', 'Segoe UI', sans-serif;
+  --font-size: 22px;
+  --train-height: 4px;
+  --widget-padding: 0;
+  --spacer-margin: 0;
+  --inset: 6px;
+
+  // the empty track of the train: a strip of the same glass
+  &::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: var(--train-height);
+    z-index: 0;
+    background: color-mix(in srgb, var(--background-color) 55%, transparent);
+  }
+
+  .main-container {
+    gap: 6px;
+    margin-bottom: calc(var(--train-height) + 6px);
+    align-items: stretch;
+    background: transparent;
+  }
+
+  // every block is its own tile of frosted glass
+  .component {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0;
+    padding: 0.3em 1em;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02) 60%),
+      color-mix(in srgb, var(--background-color) 55%, transparent);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
+    backdrop-filter: blur(14px) saturate(1.3);
+    -webkit-backdrop-filter: blur(14px) saturate(1.3);
+  }
+
+  // the tiles are separated by their gap, so the dividers go
+  .spacer {
+    display: none;
+  }
+
+  .text {
+    font-style: italic;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+  }
+
+  .accent {
+    font-weight: 700;
+  }
+
+  .train-bar {
+    position: relative;
+    z-index: 1;
+  }
+}

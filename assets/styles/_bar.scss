@@ -1,0 +1,115 @@
+// src/styles/info-bar/_bar.scss: the structure of the info bar, shared by pointlessbish.wtf (/overlay) and neko-overlays (/b/<token>).
+// This file is IDENTICAL in both projects, so a look added in one can be copied to the other without changes.
+//
+// DOM:  #info-bar[data-theme]  >  .main-container ( .stats-container | .spacer | .latest-container | .spacer | .train-container )
+//                              +  .train-bar
+// Everything you can change is a CSS custom property on #info-bar. The values below are the "classic" look; a theme
+// (_themes.scss) overrides them under #info-bar[data-theme='<id>'], and colours picked by a person (the ?accent= query on
+// the website, the colour pickers in the neko dashboard) are an inline style on #info-bar, which beats the theme.
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+}
+
+// The neko dashboard previews the bar on a checkerboard so you can see what is transparent
+body.preview {
+  background-color: #1d1d22;
+  background-image: linear-gradient(45deg, #26262c 25%, transparent 25%, transparent 75%, #26262c 75%),
+    linear-gradient(45deg, #26262c 25%, transparent 25%, transparent 75%, #26262c 75%);
+  background-size: 32px 32px;
+  background-position: 0 0, 16px 16px;
+}
+
+#info-bar {
+  --background-color: #260014;
+  --accent-color: #f1a6c0; // dividers (and the icons and the train, unless a theme says otherwise)
+  --text-color: #fdfffc;
+  --text-accent-color: #f1a6c0; // "3 Months", "100 Bits"
+  --icon-color: var(--accent-color);
+  --train-color: var(--accent-color);
+  --train-height: 8px;
+  --spacer-width: 3px;
+  --spacer-margin: 8px;
+  --widget-padding: 8px;
+  --font-size: 16px;
+  --font: 'Arya', cursive;
+  --inset: 0px; // empty space around the bar, for themes with a glow or rounded corners
+
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: calc(100% - var(--inset) * 2);
+  margin: var(--inset);
+  font-family: var(--font);
+  font-size: var(--font-size);
+}
+
+.main-container {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--widget-padding);
+  background-color: var(--background-color);
+}
+
+.component {
+  width: max-content;
+  margin: 0 var(--spacer-margin);
+  text-align: center;
+}
+
+.latest-container {
+  flex-grow: 4;
+}
+
+.spacer {
+  align-self: stretch;
+  width: var(--spacer-width);
+  background-color: var(--accent-color);
+}
+
+.train-bar {
+  flex: none;
+  width: 0;
+  height: var(--train-height);
+  background-color: var(--train-color);
+  transition: width 0.9s linear; // a little shorter than the 1 second tick, so it glides without lagging behind
+}
+
+// Fade between one stat / event and the next
+.fade {
+  transition: opacity 0.4s ease;
+
+  &.hidden {
+    opacity: 0;
+  }
+}
+
+.text {
+  color: var(--text-color);
+  white-space: nowrap;
+}
+
+.accent {
+  color: var(--text-accent-color);
+}
+
+.fas {
+  color: var(--icon-color);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .train-bar {
+    transition-duration: 0.01s;
+  }
+}

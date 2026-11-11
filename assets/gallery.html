@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>neko-overlays-plugin info bar styles</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 24px;
+      background: #0b0712;
+      color: #e2e8f0;
+      font: 15px system-ui, sans-serif;
+    }
+
+    h1 {
+      margin: 0 0 4px;
+      font-size: 20px;
+    }
+
+    p {
+      margin: 0 0 20px;
+      color: #a1a1aa;
+    }
+
+    .grid {
+      display: grid;
+      gap: 18px;
+      grid-template-columns: repeat(auto-fill, minmax(1020px, 1fr));
+    }
+
+    .cell {
+      padding: 10px 12px 12px;
+      border-radius: 10px;
+      background: #160e24;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    .cell b {
+      font: 600 13px monospace;
+      color: #f1a6c0;
+    }
+
+    .cell span {
+      font: 12px monospace;
+      color: #6272a4;
+      margin-left: 8px;
+    }
+
+    .stage {
+      margin-top: 8px;
+      width: 1000px;
+      max-width: 100%;
+      background-color: #1d1d22;
+      background-image: linear-gradient(45deg, #26262c 25%, transparent 25%, transparent 75%, #26262c 75%),
+        linear-gradient(45deg, #26262c 25%, transparent 25%, transparent 75%, #26262c 75%);
+      background-size: 32px 32px;
+      background-position: 0 0, 16px 16px;
+    }
+
+    iframe {
+      display: block;
+      width: 1000px;
+      max-width: 100%;
+      height: 72px;
+      border: 0;
+      background: transparent;
+    }
+  </style>
+</head>
+
+<body>
+  <h1>Info bar styles</h1>
+  <p>All styles with made-up numbers. This page is served by the plugin on your
+    own computer and loads nothing from the internet itself. Google fonts are
+    downloaded once by the plugin and kept on your computer, so a style may show
+    a fallback font for a few seconds the first time.</p>
+  <div class="grid" id="grid"></div>
+  <script>
+    fetch( '/api/themes' ).then( ( r ) => r.json() ).then( ( themes ) =>
+    {
+      const grid = document.getElementById( 'grid' );
+      for ( const t of themes )
+      {
+        const cell = document.createElement( 'div' );
+        cell.className = 'cell';
+        const name = document.createElement( 'b' );
+        name.textContent = t.label;
+        const id = document.createElement( 'span' );
+        id.textContent = t.id;
+        const stage = document.createElement( 'div' );
+        stage.className = 'stage';
+        const frame = document.createElement( 'iframe' );
+        frame.src = '/bar/0?demo=1&theme=' + encodeURIComponent( t.id );
+        frame.loading = 'lazy';
+        stage.append( frame );
+        cell.append( name, id, stage );
+        grid.append( cell );
+      }
+    } );
+  </script>
+</body>
+
+</html>

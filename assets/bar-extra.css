@@ -1,0 +1,21 @@
+/* neko-overlays-plugin only. Loaded after the compiled info bar styles. */
+
+/* The icons are inline SVGs (class "fas" so the style rules that colour them still match), not Font Awesome. */
+.fas {
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  vertical-align: -0.125em;
+  fill: currentColor;
+}
+
+/* The two styles that glow their icons with text-shadow: a glyph takes a text-shadow, an SVG needs drop-shadow. */
+#info-bar[data-theme="neon"] .fas {
+  text-shadow: none;
+  filter: drop-shadow(0 0 4px currentColor) drop-shadow(0 0 10px currentColor);
+}
+#info-bar[data-theme="minimal"] .fas {
+  text-shadow: none;
+  filter: drop-shadow(0 1px 2px var(--background-color))
+    drop-shadow(0 2px 8px var(--background-color));
+}

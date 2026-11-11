@@ -1,0 +1,24 @@
+# Location: neko-overlays-plugin/.gitignore
+# File: .gitignore
+
+target/
+.env
+# OBS headers and obs.lib fetched by scripts/obs-sdk.ps1 and the workflow
+.obs-sdk/
+dist/
+# Editor / machine-specific
+.vscode/
+.idea/
+*.swp
+*~
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Env variants (keep a template)
+.env.*
+!.env.example
+
+# Logs
+*.log
