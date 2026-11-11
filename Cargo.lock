@@ -474,7 +474,7 @@ dependencies = [
 
 [[package]]
 name = "neko-overlays-plugin"
-version = "0.2.0"
+version = "26.1.0"
 dependencies = [
  "bindgen",
  "grass",
