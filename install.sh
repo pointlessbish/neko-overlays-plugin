@@ -13,7 +13,7 @@ cargo build --release
 
 dest="$HOME/.var/app/com.obsproject.Studio/config/obs-studio/plugins/neko-overlays-plugin/bin/64bit"
 mkdir -p "$dest"
-cp target/release/libneko_obs.so "$dest/neko-overlays-plugin.so"
+cp target/release/libneko_overlays_plugin.so "$dest/neko-overlays-plugin.so"
 
 echo "Installed to $dest/neko-overlays-plugin.so"
 echo "Restart OBS, then add the source: Sources > + > Neko Info Bar"
