@@ -48,7 +48,7 @@ jobs:
     env:
       NEKO_TWITCH_CLIENT_ID: ${{ secrets.NEKO_TWITCH_CLIENT_ID }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: A release needs the Twitch Client ID
         if: startsWith(github.ref, 'refs/tags/v') && env.NEKO_TWITCH_CLIENT_ID == ''
