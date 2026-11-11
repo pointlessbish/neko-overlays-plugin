@@ -124,7 +124,7 @@ jobs:
         if: runner.os == 'Linux'
         run: cd dist && zip -qr "$ZIP" neko-overlays-plugin
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: neko-overlays-plugin-${{ matrix.name }}
           path: dist/${{ env.ZIP }}
