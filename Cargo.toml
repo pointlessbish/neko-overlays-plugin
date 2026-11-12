@@ -7,7 +7,7 @@ version = "26.1.0"
 edition = "2021"
 license = "GPL-2.0-or-later"
 
-[lib]
+[lib] 
 # OBS loads plugins as shared libraries (.so / .dll / .dylib)
 crate-type = ["cdylib"]
  
