@@ -1,15 +1,10 @@
-// neko-overlays-plugin: the info bar player. Runs inside the OBS browser source that the plugin creates, and in the style gallery.
-// A port of neko-overlays' src/scripts/infobar.ts: same rotation, same fade, same train, same "only a higher event number is new" rule.
-// Differences: it talks to the plugin on this computer (/api/bar/<id>/state, polled every second), the settings arrive with the
-// state (so a change in the OBS properties applies without reloading), and the icons are inline SVGs instead of Font Awesome.
-// Everything that reaches the page is built with elements and textContent, never innerHTML.
 (() => {
   'use strict';
 
-  const FADE_MS = 400; // matches the transition in _bar.scss
+  const FADE_MS = 400;
   const TRAIN_TICK_MS = 1000;
   const POLL_MS = 1000;
-  const SUB_RUN = 3; // how many subscribers are shown in a row before the rotation moves on to the next kind of event
+  const SUB_RUN = 3;
 
   const COUNT_KEYS = ['followers', 'subs', 'viewers'];
   const LATEST_KEYS = ['follower', 'subscriber', 'cheer', 'streaker'];
@@ -28,7 +23,6 @@
     latest: { follower: true, subscriber: true, cheer: true, streaker: true },
   };
 
-  // ---------- icons (simple stand-ins for the Font Awesome ones) ----------
   const SVG_NS = 'http://www.w3.org/2000/svg';
   const ICON_PATHS = {
     heart: 'M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z',
@@ -64,20 +58,19 @@
   };
   const counted = (n, one, many) => `${n} ${n > 1 ? many : one}`;
 
-  // ---------- state ----------
   let settings = structuredClone(DEFAULT_SETTINGS);
   let version = null;
-  let state = null; // { counts, latest }, null until the first answer
+  let state = null;
   let shownStatus = '';
-  let seenSeq = null; // null until the first answer: what was already there when the bar loaded is not new
+  let seenSeq = null;
 
   let timers = [];
   let statsEl = null, latestEl = null, trainCountEl = null, trainBarEl = null;
   let statKeys = [], latestKeys = [];
   let statPos = 0, latestPos = 0;
-  let subPos = 0, subRun = 0; // where the rotation through the subscriber names is
+  let subPos = 0, subRun = 0;
   let shownStat = null, shownLatest = null;
-  let trainWidth = 0; // percent
+  let trainWidth = 0;
   let trainCount = 0;
 
   const withOverride = (s) => (themeOverride ? { ...s, theme: themeOverride } : s);
@@ -93,10 +86,7 @@
     return parts.join(';');
   }
 
-  // ---------- the text of one stat / event ----------
   const statLine = (key) => line(String(state?.counts[key] ?? 0), icon(ICONS[key]));
-  /** `rotating` is the normal rotation: the subscriber slot then walks through everyone who is subscribed, with their tier.
-   *  A new event that arrives live is always shown as itself (name and months), and the list is the fallback when there is no list. */
   function latestLine(key, rotating = false) {
     const subscribers = state?.subscribers ?? [];
     if (rotating && key === 'subscriber' && subscribers.length) {
@@ -114,13 +104,11 @@
     }
   }
 
-  // ---------- the bar ----------
   function clearTimers() {
     timers.forEach((t) => { clearTimeout(t); clearInterval(t); });
     timers = [];
   }
 
-  /** The slot only ever gets wider, never narrower, so the dividers don't jump around as the text changes. */
   function place(slot, content) {
     slot.replaceChildren(content);
     slot.style.width = '';
@@ -140,7 +128,6 @@
     if (latestEl && latestKeys.length) {
       shownLatest = latestKeys[latestPos];
       swap(latestEl, latestLine(shownLatest, true));
-      // Stay on the subscribers for a few names in a row, then carry on with the next kind of event.
       const listed = shownLatest === 'subscriber' ? (state.subscribers?.length ?? 0) : 0;
       if (listed > 1 && ++subRun < Math.min(SUB_RUN, listed)) return;
       subRun = 0;
@@ -165,9 +152,6 @@
     ensureFonts();
   }
 
-  // ---------- Google fonts ----------
-  // The page never talks to Google. It asks the plugin (/api/font), which downloads the font once into its own folder;
-  // when that is done the page reloads /fonts.css and the font is served from this computer.
   const SYSTEM_FONTS = new Set([
     'system-ui', 'ui-monospace', 'ui-sans-serif', 'ui-serif', '-apple-system', 'blinkmacsystemfont', 'sans-serif', 'serif',
     'monospace', 'cursive', 'fantasy', 'segoe ui', 'roboto', 'tahoma', 'geneva', 'georgia', 'menlo', 'consolas',
@@ -175,7 +159,6 @@
   ]);
   const fontsAsked = new Set();
 
-  /** The font names the current style uses, as the page really sees them (the style's own, or the one typed in OBS). */
   function fontNames() {
     const stack = getComputedStyle(root).getPropertyValue('--font');
     return stack.split(',')
@@ -183,7 +166,6 @@
       .filter((name) => name && /^[A-Za-z0-9 ]{1,40}$/.test(name) && !SYSTEM_FONTS.has(name.toLowerCase()));
   }
 
-  /** Loads /fonts.css again. The new link is in place before the old one goes, so the text does not flash. */
   function reloadFontCss() {
     return new Promise((resolve) => {
       const old = document.querySelector('link[data-fonts]');
@@ -204,13 +186,12 @@
         const answer = await res.json();
         if (answer.status === 'ready') {
           await reloadFontCss();
-          try { await Promise.race([document.fonts.load(`1em "${name}"`), new Promise((r) => setTimeout(r, 3000))]); } catch { /* shown in the fallback until it is there */ }
-          // The slots were measured with the fallback font: build the bar again so they are measured with this one.
+          try { await Promise.race([document.fonts.load(`1em "${name}"`), new Promise((r) => setTimeout(r, 3000))]); } catch { }
           if (state && fontNames().includes(name)) mount();
           return;
         }
-        if (answer.status === 'failed') return; // not a Google font, or no connection: the style's fallback fonts are used
-      } catch { /* the plugin is busy for a moment: try again */ }
+        if (answer.status === 'failed') return;
+      } catch { }
       await new Promise((r) => setTimeout(r, 1000));
     }
   }
@@ -224,7 +205,6 @@
     }
   }
 
-  /** (Re)builds the bar for the current settings. Slots that are switched off are left out, with their divider. */
   function mount() {
     clearTimers();
     dress();
@@ -257,12 +237,11 @@
     drawTrain();
 
     if (state) {
-      rotate(); // show something real straight away
+      rotate();
       timers.push(window.setInterval(rotate, settings.rotateSeconds * 1000));
     }
   }
 
-  /** While the plugin has something to say (log in, an error) the bar shows that and nothing else. */
   function showStatus(status) {
     clearTimers();
     dress();
@@ -274,8 +253,7 @@
     root.replaceChildren(main);
   }
 
-  // ---------- new data ----------
-  // Only a HIGHER event number counts as a new event, so a slightly old answer can never run the train twice.
+  // Only a higher event number counts as new, so a stale answer can never run the train twice.
   function receive(next) {
     const trainKey = settings.train.type === 'follower' ? 'follower' : 'subscriber';
     const seq = next.latest[trainKey]?.seq ?? 0;
@@ -285,12 +263,10 @@
     const previous = state;
     state = next;
     if (!previous) {
-      mount(); // first answer: build the bar and start rotating
+      mount();
       return;
     }
-    // LIVE: the number on screen changes the moment the data does, without waiting for the next rotation
     if (statsEl && shownStat && previous.counts[shownStat] !== next.counts[shownStat]) place(statsEl, statLine(shownStat));
-    // A new event is shown straight away (then the rotation carries on from the slot after it)
     const fresh = latestKeys.filter((k) => (next.latest[k]?.seq ?? 0) > (previous.latest[k]?.seq ?? 0));
     if (latestEl && fresh.length) {
       shownLatest = fresh[fresh.length - 1];
@@ -310,13 +286,13 @@
     if (data.status) {
       const key = `${data.status.label}|${data.status.value}`;
       if (key !== shownStatus || changed) { shownStatus = key; showStatus(data.status); }
-      state = null; // so the bar is built from scratch when the status goes away
+      state = null;
       seenSeq = null;
       return;
     }
     if (shownStatus) { shownStatus = ''; state = null; seenSeq = null; }
 
-    if (changed && state) { // the settings were changed in OBS: rebuild with them, keep what is already known
+    if (changed && state) {
       state = next;
       mount();
       return;
@@ -324,16 +300,14 @@
     receive(next);
   }
 
-  // ---------- transport ----------
   async function poll() {
     try {
       const res = await fetch(`/api/bar/${encodeURIComponent(barId)}/state`, { cache: 'no-store', signal: AbortSignal.timeout(5000) });
       if (res.ok) handle(await res.json());
-    } catch { /* the plugin is busy for a moment: try again */ }
+    } catch { }
     setTimeout(poll, POLL_MS);
   }
 
-  // ---------- demo (the style gallery, or ?demo=1 in any browser) ----------
   const demoState = () => ({
     counts: { followers: 1284, subs: 86, viewers: 42 },
     subscribers: [{ name: 'Relfy10', tier: 3 }, { name: 'NekoFan', tier: 2 }, { name: 'SogFan', tier: 1 }, { name: 'SomeoneNice', tier: 1 }],
@@ -349,7 +323,7 @@
     settings = withOverride(structuredClone(DEFAULT_SETTINGS));
     settings.rotateSeconds = 4;
     receive(demoState());
-    window.setInterval(() => { // a test subscriber now and then, so the train and the live update can be seen
+    window.setInterval(() => {
       const next = structuredClone(state);
       next.latest.subscriber = { name: 'TestViewer', amount: 3, seq: (state.latest.subscriber?.seq ?? 0) + 1 };
       next.counts.subs++;

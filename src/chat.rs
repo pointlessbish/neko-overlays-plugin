@@ -1,22 +1,14 @@
-// Location: neko-overlays-plugin/src/chat.rs
-// File: chat.rs
-
-//! Reads your own Twitch chat (IRC over TLS) to find subscriptions, cheers and watch streaks, which
-//! feed the "latest subscriber", "latest cheer" and "latest watch streak" slots of the info bar.
-//! It only listens: it never sends a chat message.
-//!
-//! It uses the login from twitch.rs (the `chat:read` permission). If you connected before that
-//! permission was added, click Connect to Twitch once more.
-
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::{ErrorKind, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
+use serde_json::{json, Value};
 
 use crate::log_msg;
 use crate::twitch::{self, ChatAuth, Slot};
@@ -67,7 +59,7 @@ fn run() {
             continue;
         };
         match session(&config, &auth) {
-            Ok(()) => backoff = 5, // asked to reconnect, or the login changed
+            Ok(()) => backoff = 5,
             Err(message) => {
                 log_msg(&format!("[neko-overlays-plugin] chat: {message}"));
                 twitch::pause(Duration::from_secs(backoff));
@@ -82,7 +74,6 @@ enum Flow {
     Reconnect,
 }
 
-/// One connection to chat. Returns Ok when it should simply be opened again.
 fn session(config: &Arc<ClientConfig>, auth: &ChatAuth) -> Result<(), String> {
     let address = (HOST, PORT)
         .to_socket_addrs()
@@ -90,7 +81,6 @@ fn session(config: &Arc<ClientConfig>, auth: &ChatAuth) -> Result<(), String> {
         .next()
         .ok_or_else(|| String::from("no address for the chat server"))?;
     let tcp = TcpStream::connect_timeout(&address, Duration::from_secs(10)).map_err(|e| e.to_string())?;
-    // A short read timeout lets the loop below notice shutdown and a changed login.
     tcp.set_read_timeout(Some(Duration::from_millis(500))).map_err(|e| e.to_string())?;
     tcp.set_write_timeout(Some(Duration::from_secs(10))).map_err(|e| e.to_string())?;
 
@@ -99,8 +89,9 @@ fn session(config: &Arc<ClientConfig>, auth: &ChatAuth) -> Result<(), String> {
     let mut stream = StreamOwned::new(connection, tcp);
 
     let login = auth.login.to_lowercase();
+    use_channel(&login);
     send(&mut stream, "CAP REQ :twitch.tv/tags twitch.tv/commands")?;
-    send(&mut stream, &format!("PASS oauth:{}", auth.token))?; // never logged
+    send(&mut stream, &format!("PASS oauth:{}", auth.token))?;
     send(&mut stream, &format!("NICK {login}"))?;
     send(&mut stream, &format!("JOIN #{login}"))?;
 
@@ -112,7 +103,6 @@ fn session(config: &Arc<ClientConfig>, auth: &ChatAuth) -> Result<(), String> {
         if twitch::stopping() {
             return Ok(());
         }
-        // Logged out, or logged in as somebody else: leave, the caller connects again with the new login.
         if twitch::chat_auth().map_or(true, |current| current.gen != auth.gen) {
             return Ok(());
         }
@@ -131,7 +121,6 @@ fn session(config: &Arc<ClientConfig>, auth: &ChatAuth) -> Result<(), String> {
                 }
             }
             Err(error) if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
-                // Twitch pings about every 5 minutes, so 6 minutes of silence means the line is dead.
                 if last_data.elapsed() > Duration::from_secs(360) {
                     return Err(String::from("no data from chat for 6 minutes"));
                 }
@@ -156,7 +145,7 @@ fn handle_line(stream: &mut impl Write, line: &str) -> Result<Flow, String> {
 
     let (tags, rest) = split_tags(line);
     let mut parts = rest.splitn(3, ' ');
-    let _prefix = parts.next().unwrap_or("");
+    let prefix = parts.next().unwrap_or("");
     let command = parts.next().unwrap_or("");
     let params = parts.next().unwrap_or("");
 
@@ -171,13 +160,29 @@ fn handle_line(stream: &mut impl Write, line: &str) -> Result<Flow, String> {
             }
         }
         "USERNOTICE" => user_notice(&tags),
-        "PRIVMSG" => cheer(&tags),
+        "PRIVMSG" => {
+            cheer(&tags);
+            chat_message(&tags, prefix, params);
+        }
+        "CLEARMSG" => {
+            if let Some(id) = tags.get("target-msg-id") {
+                remove_message(id);
+            }
+        }
+        "CLEARCHAT" => match tags.get("target-user-id") {
+            Some(user_id) if !user_id.is_empty() => remove_user(user_id),
+            _ => clear_log(),
+        },
+        "ROOMSTATE" => {
+            if let Some(id) = tags.get("room-id") {
+                set_room(id);
+            }
+        }
         _ => {}
     }
     Ok(Flow::Continue)
 }
 
-/// "@a=1;b=2 :rest of the line" -> ({a: 1, b: 2}, ":rest of the line")
 fn split_tags(line: &str) -> (HashMap<&str, String>, &str) {
     let Some(stripped) = line.strip_prefix('@') else {
         return (HashMap::new(), line);
@@ -193,7 +198,6 @@ fn split_tags(line: &str) -> (HashMap<&str, String>, &str) {
     (tags, rest)
 }
 
-/// IRC tag values escape a few characters.
 fn unescape(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     let mut chars = value.chars();
@@ -227,7 +231,6 @@ fn display_name(tags: &HashMap<&str, String>) -> String {
         .unwrap_or_else(|| String::from("someone"))
 }
 
-/// Subscriptions, gifted subscriptions and watch streaks.
 fn user_notice(tags: &HashMap<&str, String>) {
     let name = display_name(tags);
     match tags.get("msg-id").map(String::as_str) {
@@ -255,11 +258,186 @@ fn user_notice(tags: &HashMap<&str, String>) {
     }
 }
 
-/// A chat message with bits is a cheer.
 fn cheer(tags: &HashMap<&str, String>) {
     if let Some(bits) = number(tags, "bits") {
         if bits > 0 {
             twitch::record_event(Slot::Cheer, &display_name(tags), Some(bits));
         }
     }
+}
+
+const LOG_LIMIT: usize = 100;
+
+struct ChatLine {
+    seq: u64,
+    time_ms: u64,
+    id: String,
+    user_id: String,
+    login: String,
+    name: String,
+    color: String,
+    text: String,
+    action: bool,
+    emotes: Vec<(String, u64, u64)>,
+    badges: Vec<(String, String)>,
+}
+
+static LOG: Mutex<VecDeque<ChatLine>> = Mutex::new(VecDeque::new());
+static NEXT_SEQ: AtomicU64 = AtomicU64::new(1);
+static CHANNEL: Mutex<String> = Mutex::new(String::new());
+static ROOM: Mutex<String> = Mutex::new(String::new());
+
+fn use_channel(login: &str) {
+    if let Ok(mut current) = CHANNEL.lock() {
+        if *current != login {
+            *current = login.to_string();
+            clear_log();
+            if let Ok(mut room) = ROOM.lock() {
+                room.clear();
+            }
+        }
+    }
+}
+
+fn set_room(id: &str) {
+    if id.is_empty() || !id.chars().all(|c| c.is_ascii_digit()) {
+        return;
+    }
+    if let Ok(mut room) = ROOM.lock() {
+        if *room != id {
+            *room = id.to_string();
+        }
+    }
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+fn clear_log() {
+    if let Ok(mut log) = LOG.lock() {
+        log.clear();
+    }
+}
+
+fn remove_message(id: &str) {
+    if let Ok(mut log) = LOG.lock() {
+        log.retain(|line| line.id != id);
+    }
+}
+
+fn remove_user(user_id: &str) {
+    if let Ok(mut log) = LOG.lock() {
+        log.retain(|line| line.user_id != user_id);
+    }
+}
+
+fn parse_emotes(raw: &str) -> Vec<(String, u64, u64)> {
+    let mut out = Vec::new();
+    for group in raw.split('/') {
+        let Some((id, ranges)) = group.split_once(':') else { continue };
+        if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            continue;
+        }
+        for range in ranges.split(',') {
+            let Some((start, end)) = range.split_once('-') else { continue };
+            if let (Ok(start), Ok(end)) = (start.parse::<u64>(), end.parse::<u64>()) {
+                out.push((id.to_string(), start, end));
+            }
+        }
+    }
+    out.sort_by_key(|entry| entry.1);
+    out
+}
+
+fn parse_badges(raw: &str) -> Vec<(String, String)> {
+    let plain = |text: &str| {
+        !text.is_empty() && text.len() <= 40 && text.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    };
+    raw.split(',')
+        .filter_map(|pair| {
+            let (set, version) = pair.split_once('/')?;
+            if plain(set) && plain(version) {
+                Some((set.to_string(), version.to_string()))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn chat_message(tags: &HashMap<&str, String>, prefix: &str, params: &str) {
+    let Some((_, text)) = params.split_once(" :") else { return };
+    // "/me waves" arrives as \x01ACTION waves\x01; emote positions count from after "ACTION ".
+    let (text, action) = match text.strip_prefix("\u{1}ACTION ") {
+        Some(inner) => (inner.trim_end_matches('\u{1}'), true),
+        None => (text, false),
+    };
+    let login = prefix.trim_start_matches(':').split('!').next().unwrap_or("").to_lowercase();
+    if login.is_empty() || text.is_empty() {
+        return;
+    }
+    if let Some(room) = tags.get("room-id") {
+        set_room(room);
+    }
+
+    let color = tags
+        .get("color")
+        .filter(|value| value.len() == 7 && value.starts_with('#') && value[1..].chars().all(|c| c.is_ascii_hexdigit()))
+        .cloned()
+        .unwrap_or_default();
+    let line = ChatLine {
+        seq: NEXT_SEQ.fetch_add(1, Ordering::SeqCst),
+        time_ms: now_ms(),
+        id: tags.get("id").cloned().unwrap_or_default(),
+        user_id: tags.get("user-id").cloned().unwrap_or_default(),
+        name: display_name_or(tags, &login),
+        login,
+        color,
+        text: text.to_string(),
+        action,
+        emotes: parse_emotes(tags.get("emotes").map(String::as_str).unwrap_or("")),
+        badges: parse_badges(tags.get("badges").map(String::as_str).unwrap_or("")),
+    };
+
+    if let Ok(mut log) = LOG.lock() {
+        log.push_back(line);
+        while log.len() > LOG_LIMIT {
+            log.pop_front();
+        }
+    }
+}
+
+fn display_name_or(tags: &HashMap<&str, String>, login: &str) -> String {
+    tags.get("display-name")
+        .filter(|value| !value.is_empty())
+        .cloned()
+        .unwrap_or_else(|| login.to_string())
+}
+
+fn line_json(line: &ChatLine) -> Value {
+    json!({
+        "seq": line.seq,
+        "ts": line.time_ms,
+        "id": line.id,
+        "login": line.login,
+        "name": line.name,
+        "color": line.color,
+        "text": line.text,
+        "action": line.action,
+        "emotes": line.emotes.iter().map(|(id, start, end)| json!({ "id": id, "start": start, "end": end })).collect::<Vec<Value>>(),
+        "badges": line.badges.iter().map(|(set, version)| json!({ "set": set, "v": version })).collect::<Vec<Value>>(),
+    })
+}
+
+pub fn state_json() -> Value {
+    let room = ROOM.lock().map(|room| room.clone()).unwrap_or_default();
+    let messages: Vec<Value> = LOG
+        .lock()
+        .map(|log| log.iter().map(line_json).collect::<Vec<Value>>())
+        .unwrap_or_default();
+    json!({ "room": room, "messages": messages })
 }

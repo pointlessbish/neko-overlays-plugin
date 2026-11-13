@@ -1,6 +1,3 @@
-<!-- Location: neko-overlays-plugin/BUILD.md -->
-<!-- File: BUILD.md -->
-
 # Building and releasing
 
 Everything about building neko-overlays-plugin yourself: on Linux, on Windows, and on GitHub (which also makes the
@@ -113,17 +110,27 @@ different OBS version once, use the workflow's **Run workflow** button.
 
 - The plugin starts a small web server on `127.0.0.1` (port 47831, or the next free one up to 47850). It only answers
   requests addressed to this computer, and it serves only the bar's settings and numbers, never your Twitch login.
-- The Neko Info Bar source wraps an OBS browser source that shows the bar page from that server. The page and its
+- The Neko Info Bar and Neko Chat sources each wrap an OBS browser source that shows their page from that server
+  (`/bar/<id>` and `/chat/<id>`). The page and its
   styles (SCSS, compiled while building) are inside the plugin, so OBS needs its built-in Browser source.
 - Twitch data comes straight from Twitch: the Helix API every 15 seconds (followers, newest follower, subscribers,
-  viewers), and your own chat (read only) for subscriptions, cheers and watch streaks. Nothing goes through any other
-  server.
+  viewers), and your own chat (read only) for subscriptions, cheers, watch streaks and the Neko Chat messages. Nothing goes
+  through any other server.
 - Subscribers: `poll_stats` in `src/twitch.rs` calls `fetch_subscribers`, which reads `subscriptions` in pages of 100
   (a short page ends the loop, because Twitch also sends a cursor on the last page). The count is Twitch's `total`, which
   does not include the broadcaster; the list does, so the broadcaster's own entry is skipped. The names go to the bar as
   `subscribers` in `/api/bar/<id>/state`, sorted by tier, then name, and `assets/bar.js` rotates through them
   (`SUB_RUN` names in a row). A failed request keeps the last count and names; the reason is written to the OBS log once
   (`note_subscriber_problem`), not on every poll.
+- Neko Chat: `src/chat.rs` keeps the last 100 chat messages in a log (with the emote positions, badges and room id from the
+  IRC tags). `CLEARMSG` (one message deleted) removes that message from the log, `CLEARCHAT` removes everything from the
+  timed-out or banned user (or everything, for `/clear`). The page (`assets/chat.js`) polls `/api/chat/<id>/state` twice a
+  second; the answer holds the messages that are still in the chat, so a deleted message is simply missing and the page
+  takes it off the screen. The blocklist ("Hidden users") is turned into a list of lowercase names by `blocklist` in
+  `src/chat_overlay.rs` and applied by the page, so editing it applies at once. The chat page itself loads the emote and badge
+  pictures, and the 7TV / BTTV / FrankerFaceZ emote lists, straight from their servers (`static-cdn.jtvnw.net`,
+  `badges.twitch.tv`, `cdn.7tv.app`, `7tv.io`, `betterttv.net`, `frankerfacez.com`). That is the only thing the pages load from
+  the internet; a failure only means the emotes or badges are missing.
 - The latest events (`latest.json`) and the login (`twitch.txt`) are kept in the plugin's config folder. See the README
   for where that is.
 - Fonts: the bar page never contacts Google. The first time a style or the Font box needs a Google font, the plugin
@@ -158,10 +165,12 @@ Client ID, which Twitch rejects with "Client ID and OAuth token do not match".
 
 ## Files
 
-- `src/lib.rs` the plugin entry point, `src/server.rs` local web server, `src/info_bar.rs` the OBS source,
-  `src/twitch.rs` login and Helix, `src/chat.rs` chat, `src/fonts.rs` Google font download and cache
-- `assets/bar.js`, `assets/bar.html`, `assets/bar-extra.css`, `assets/gallery.html`, `assets/connect.html`, `assets/styles/*.scss` the bar page,
-  the style gallery and the styles. To change a style, edit the SCSS and rebuild.
+- `src/lib.rs` the plugin entry point, `src/server.rs` local web server, `src/info_bar.rs` the Neko Info Bar OBS source,
+  `src/chat_overlay.rs` the Neko Chat OBS source, `src/twitch.rs` login and Helix, `src/chat.rs` the chat connection and
+  the chat log, `src/fonts.rs` Google font download and cache
+- `assets/bar.js`, `assets/bar.html`, `assets/bar-extra.css`, `assets/chat.js`, `assets/chat.html`, `assets/gallery.html`,
+  `assets/connect.html`, `assets/styles/*.scss` the bar and chat pages, the style gallery and the styles (`_chat.scss` is the
+  chat look of every style). To change a style, edit the SCSS and rebuild.
 - `build.rs` builds the OBS bindings, compiles the styles and reads the Client ID
 - `install.sh` build and install on Linux (Flatpak OBS), `scripts/obs-sdk.ps1` the Windows OBS headers and `obs.lib`
 - `.github/workflows/build.yml` the GitHub build and release, `.cargo/config.toml` the Windows runtime setting

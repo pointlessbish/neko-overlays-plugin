@@ -1,20 +1,3 @@
-// Location: neko-overlays-plugin/src/server.rs
-// File: server.rs
-
-//! The local web server. It serves the info bar page to OBS's browser source, and nothing else.
-//!
-//! - It listens on 127.0.0.1 only, so nothing outside this computer can reach it.
-//! - Everything the page needs is inside the plugin (HTML, JS, the compiled styles, the Stargate artwork).
-//!   The only files read from disk are the fonts in the plugin's config folder. Google fonts are
-//!   downloaded into that folder the first time a style asks for one (fonts.rs); the page itself never
-//!   contacts Google.
-//! - Nothing here leaves the computer, and nothing secret is served: the page gets the numbers and
-//!   names shown on the bar and the bar's settings, never a Twitch token.
-//!
-//! Routes: /bar/<id> (the bar), /api/bar/<id>/state, /bar.css, /bar.js, /fonts.css, /fonts/<file>,
-//! /api/font?family=<name>, /api/themes and / (a gallery of every style with made-up numbers),
-//! plus /connect and /api/login (the page where the Twitch login code can be copied).
-
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -24,13 +7,11 @@ use std::time::Duration;
 use serde_json::{json, Value};
 use tiny_http::{Header, Request, Response, Server, StatusCode};
 
-use crate::{config_file, fonts, log_msg, twitch};
+use crate::{chat, config_file, fonts, log_msg, lookups, twitch};
 
-/// The first port tried. If it is busy the next ones are tried, and the bar is pointed at whichever worked.
 const FIRST_PORT: u16 = 47831;
 const PORT_TRIES: u16 = 20;
 
-/// (id, label). The ids are the data-theme names in the stylesheets. The default comes first.
 pub const THEMES: [(&str, &str); 12] = [
     ("classic", "Classic"),
     ("glass", "Glass"),
@@ -49,7 +30,9 @@ pub const THEMES: [(&str, &str); 12] = [
 const BAR_HTML: &str = include_str!("../assets/bar.html");
 const GALLERY_HTML: &str = include_str!("../assets/gallery.html");
 const CONNECT_HTML: &str = include_str!("../assets/connect.html");
+const CHAT_HTML: &str = include_str!("../assets/chat.html");
 const BAR_JS: &str = include_str!("../assets/bar.js");
+const CHAT_JS: &str = include_str!("../assets/chat.js");
 const BAR_CSS: &str = include_str!(concat!(env!("OUT_DIR"), "/infobar.css"));
 const EXTRA_CSS: &str = include_str!("../assets/bar-extra.css");
 const STARGATE_LINES: &str = include_str!("../assets/stargate-lines.svg");
@@ -60,11 +43,8 @@ static STOP: AtomicBool = AtomicBool::new(false);
 static NEXT_ID: AtomicU32 = AtomicU32::new(1);
 static WORKER: Mutex<Option<JoinHandle<()>>> = Mutex::new(None);
 
-// --- The bars (one per info bar source in OBS) ---------------------------------------------
-
 struct Bar {
     settings: Value,
-    /// Changes whenever the settings change, so the page knows to rebuild itself.
     version: u64,
 }
 
@@ -74,7 +54,6 @@ fn bars() -> &'static Mutex<HashMap<u32, Bar>> {
     BARS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// The settings a bar has before anyone changed anything. Same shape as the ones info_bar.rs builds.
 pub fn default_settings() -> Value {
     json!({
         "theme": "classic",
@@ -89,7 +68,23 @@ pub fn default_settings() -> Value {
     })
 }
 
-/// Called when an info bar source is created. Returns the id its page is served under.
+pub fn default_chat_settings() -> Value {
+    json!({
+        "theme": "classic",
+        "colors": {},
+        "font": null,
+        "fontSize": null,
+        "googleFonts": true,
+        "maxMessages": 12,
+        "lifetimeSeconds": 0,
+        "twitchColors": true,
+        "badges": true,
+        "avatars": true,
+        "thirdParty": true,
+        "blocklist": ["streamelements", "streamlabs"]
+    })
+}
+
 pub fn register_bar() -> u32 {
     let id = NEXT_ID.fetch_add(1, Ordering::SeqCst);
     if let Ok(mut all) = bars().lock() {
@@ -113,17 +108,17 @@ pub fn remove_bar(id: u32) {
     }
 }
 
-/// 0 when the server could not start.
 pub fn port() -> u16 {
     PORT.load(Ordering::SeqCst)
 }
 
-/// The address OBS's browser source loads for a bar.
 pub fn bar_url(id: u32) -> String {
     format!("http://127.0.0.1:{}/bar/{id}", port())
 }
 
-// --- Lifecycle -------------------------------------------------------------------------------
+pub fn chat_url(id: u32) -> String {
+    format!("http://127.0.0.1:{}/chat/{id}", port())
+}
 
 pub fn start() {
     STOP.store(false, Ordering::SeqCst);
@@ -156,7 +151,7 @@ pub fn start() {
     }
 }
 
-/// Stops the server and waits for it. Must happen before OBS unloads the plugin.
+// Must run before OBS unloads the plugin.
 pub fn stop() {
     STOP.store(true, Ordering::SeqCst);
     let handle = WORKER.lock().ok().and_then(|mut worker| worker.take());
@@ -175,8 +170,6 @@ fn serve(server: Server) {
         }
     }
 }
-
-// --- Requests ---------------------------------------------------------------------------------
 
 fn reply(request: Request, status: u16, content_type: &str, body: Vec<u8>) {
     let mut response = Response::from_data(body).with_status_code(StatusCode(status));
@@ -197,8 +190,7 @@ fn not_found(request: Request) {
     reply(request, 404, "text/plain; charset=utf-8", b"Not found".to_vec());
 }
 
-/// Only requests addressed to this computer are answered. A web page cannot make a browser send
-/// anything else to 127.0.0.1, unless it tricks it with a DNS name that points here (DNS rebinding).
+// Only answer requests addressed to this computer (guards against DNS rebinding).
 fn host_is_local(request: &Request) -> bool {
     request.headers().iter().any(|header| {
         if !header.field.equiv("Host") {
@@ -222,6 +214,7 @@ fn handle(request: Request) {
     match path.as_str() {
         "/" | "/styles" => reply_text(request, "text/html; charset=utf-8", GALLERY_HTML),
         "/bar.js" => reply_text(request, "text/javascript; charset=utf-8", BAR_JS),
+        "/chat.js" => reply_text(request, "text/javascript; charset=utf-8", CHAT_JS),
         "/bar.css" => {
             let css = format!("{BAR_CSS}\n{EXTRA_CSS}");
             reply_text(request, "text/css; charset=utf-8", &css);
@@ -229,15 +222,22 @@ fn handle(request: Request) {
         "/stargate-lines.svg" => reply_text(request, "image/svg+xml", STARGATE_LINES),
         "/stargate-stars.svg" => reply_text(request, "image/svg+xml", STARGATE_STARS),
         "/fonts.css" => {
-            // Every font downloaded so far (fonts.rs). Until a font is there the style uses a fallback.
             reply(request, 200, "text/css; charset=utf-8", fonts::combined_css());
         }
         "/api/font" => {
-            // The page asks for a Google font by name; the download runs in the background and the page asks again.
             let family = query_value(&url, "family").unwrap_or_default();
             let status = fonts::request(&family);
             let body = json!({ "status": status.as_str(), "generation": fonts::generation() });
             reply_text(request, "application/json", &body.to_string());
+        }
+        "/api/badges" => {
+            let room = query_value(&url, "room").unwrap_or_default();
+            reply_text(request, "application/json", &lookups::badges(&room).to_string());
+        }
+        "/api/avatars" => {
+            let logins = query_value(&url, "logins").unwrap_or_default();
+            let list: Vec<&str> = logins.split(',').collect();
+            reply_text(request, "application/json", &lookups::avatars(&list).to_string());
         }
         "/connect" => reply_text(request, "text/html; charset=utf-8", CONNECT_HTML),
         "/api/login" => reply_text(request, "application/json", &twitch::state_json().to_string()),
@@ -253,6 +253,13 @@ fn handle(request: Request) {
                 }
             } else if path.starts_with("/bar/") {
                 reply_text(request, "text/html; charset=utf-8", BAR_HTML);
+            } else if path.starts_with("/chat/") {
+                reply_text(request, "text/html; charset=utf-8", CHAT_HTML);
+            } else if let Some(id) = path.strip_prefix("/api/chat/").and_then(|rest| rest.strip_suffix("/state")) {
+                match chat_state(id) {
+                    Some(state) => reply_text(request, "application/json", &state.to_string()),
+                    None => not_found(request),
+                }
             } else if let Some(id) = path.strip_prefix("/api/bar/").and_then(|rest| rest.strip_suffix("/state")) {
                 match bar_state(id) {
                     Some(state) => reply_text(request, "application/json", &state.to_string()),
@@ -265,11 +272,10 @@ fn handle(request: Request) {
     }
 }
 
-/// What the page polls: the bar's settings and version, plus the numbers and latest events.
 fn bar_state(id: &str) -> Option<Value> {
     let id: u32 = id.parse().ok()?;
     let (settings, version) = if id == 0 {
-        (default_settings(), 1) // the gallery's bar: it is not tied to a source
+        (default_settings(), 1)
     } else {
         let all = bars().lock().ok()?;
         let bar = all.get(&id)?;
@@ -281,9 +287,22 @@ fn bar_state(id: &str) -> Option<Value> {
     Some(state)
 }
 
-// --- Fonts ----------------------------------------------------------------------------------------
+fn chat_state(id: &str) -> Option<Value> {
+    let id: u32 = id.parse().ok()?;
+    let (settings, version) = if id == 0 {
+        (default_chat_settings(), 1)
+    } else {
+        let all = bars().lock().ok()?;
+        let bar = all.get(&id)?;
+        (bar.settings.clone(), bar.version)
+    };
+    let mut state = chat::state_json();
+    state["v"] = json!(version);
+    state["settings"] = settings;
+    state["status"] = twitch::state_json()["status"].clone();
+    Some(state)
+}
 
-/// The value of one query parameter, with %XX and + decoded.
 fn query_value(url: &str, key: &str) -> Option<String> {
     let query = url.split_once('?')?.1;
     let raw = query.split('&').find_map(|pair| {
@@ -318,7 +337,6 @@ fn font_type(name: &str) -> &'static str {
     }
 }
 
-/// A file from the plugin's `fonts` config folder. Only plain file names are accepted.
 fn read_font_file(name: &str) -> Option<Vec<u8>> {
     let plain = !name.is_empty()
         && name.len() <= 100
@@ -330,8 +348,6 @@ fn read_font_file(name: &str) -> Option<Vec<u8>> {
     std::fs::read(config_file(&format!("fonts/{name}"))?).ok()
 }
 
-/// Opens the login page (/connect) in the default browser, so the Twitch code can be copied instead of typed.
-/// If it cannot be opened, the address is in the OBS log and the user can open it themselves.
 pub fn open_connect_page() {
     let port = port();
     if port == 0 {
@@ -346,7 +362,6 @@ pub fn open_connect_page() {
 
     match started {
         Ok(mut child) => {
-            // Collect the finished helper process, so it does not linger.
             thread::spawn(move || {
                 let _ = child.wait();
             });

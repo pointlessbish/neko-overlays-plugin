@@ -1,16 +1,3 @@
-// src/styles/info-bar/_themes.scss: the looks for the info bar. IDENTICAL in pointlessbish.wtf and neko-overlays.
-// To add one: add a block here, add an entry to the theme list (src/lib/info-bar-themes.ts on the website, src/lib/themes.ts in neko).
-// The colours below are what the colour pickers show when nobody changed anything: keep the list entries in sync.
-//
-//   classic    the original: flat plum bar, pink dividers (the default, defined in _bar.scss)
-//   glass      frosted pill with a pink hairline and glow          (the pointlessbish.wtf glass panels)
-//   neon       glowing pink sign, almost no fill
-//   terminal   console readout, blocky train
-//   ribbon     bold gradient strip with slanted dividers
-//   minimal    no box at all: text with a shadow, dots between, a thin train line
-//   blossom    light pastel card (for bright scenes)
-
-// ---------- glass ----------
 #info-bar[data-theme='glass'] {
   --background-color: #260014;
   --accent-color: #f1a6c0;
@@ -51,7 +38,6 @@
   }
 }
 
-// ---------- neon ----------
 #info-bar[data-theme='neon'] {
   --background-color: #14000a;
   --accent-color: #ff4fb4;
@@ -107,7 +93,6 @@
   }
 }
 
-// ---------- terminal ----------
 #info-bar[data-theme='terminal'] {
   --background-color: #08060c;
   --accent-color: #f1a6c0;
@@ -142,12 +127,10 @@
     color: var(--accent-color);
   }
   .train-bar {
-    // the bar is built out of blocks: 8px of colour, 2px of gap
     background: repeating-linear-gradient(90deg, var(--train-color) 0 8px, transparent 8px 10px);
   }
 }
 
-// ---------- ribbon ----------
 #info-bar[data-theme='ribbon'] {
   --background-color: #260014;
   --accent-color: #f1a6c0;
@@ -182,9 +165,8 @@
   }
 }
 
-// ---------- minimal ----------
 #info-bar[data-theme='minimal'] {
-  --background-color: #000000; // only used for the text shadow
+  --background-color: #000000;
   --accent-color: #f1a6c0;
   --text-color: #ffffff;
   --text-accent-color: #f1a6c0;
@@ -215,7 +197,6 @@
   }
 }
 
-// ---------- blossom ----------
 #info-bar[data-theme='blossom'] {
   --background-color: #fff0f5;
   --accent-color: #e0709a;

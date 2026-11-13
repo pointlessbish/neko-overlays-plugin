@@ -4,7 +4,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>neko-overlays-plugin info bar styles</title>
+  <title>neko-overlays-plugin styles</title>
   <style>
     body {
       margin: 0;
@@ -67,6 +67,24 @@
       border: 0;
       background: transparent;
     }
+
+    h2 {
+      margin: 36px 0 4px;
+      font-size: 20px;
+    }
+
+    .grid.chat {
+      grid-template-columns: repeat(auto-fill, minmax(450px, 1fr));
+    }
+
+    .grid.chat .stage,
+    .grid.chat iframe {
+      width: 420px;
+    }
+
+    .grid.chat iframe {
+      height: 320px;
+    }
   </style>
 </head>
 
@@ -77,27 +95,37 @@
     downloaded once by the plugin and kept on your computer, so a style may show
     a fallback font for a few seconds the first time.</p>
   <div class="grid" id="grid"></div>
+  <h2>Chat styles</h2>
+  <p>The Neko Chat source in the same styles, with made-up messages. The StreamElements message is hidden by the default
+    Hidden users list, and now and then a message is deleted, which removes it from the overlay. Emote and badge pictures
+    are loaded from their own servers, so they need an internet connection.</p>
+  <div class="grid chat" id="chat-grid"></div>
   <script>
     fetch( '/api/themes' ).then( ( r ) => r.json() ).then( ( themes ) =>
     {
-      const grid = document.getElementById( 'grid' );
-      for ( const t of themes )
+      const fill = ( gridId, page ) =>
       {
-        const cell = document.createElement( 'div' );
-        cell.className = 'cell';
-        const name = document.createElement( 'b' );
-        name.textContent = t.label;
-        const id = document.createElement( 'span' );
-        id.textContent = t.id;
-        const stage = document.createElement( 'div' );
-        stage.className = 'stage';
-        const frame = document.createElement( 'iframe' );
-        frame.src = '/bar/0?demo=1&theme=' + encodeURIComponent( t.id );
-        frame.loading = 'lazy';
-        stage.append( frame );
-        cell.append( name, id, stage );
-        grid.append( cell );
-      }
+        const grid = document.getElementById( gridId );
+        for ( const t of themes )
+        {
+          const cell = document.createElement( 'div' );
+          cell.className = 'cell';
+          const name = document.createElement( 'b' );
+          name.textContent = t.label;
+          const id = document.createElement( 'span' );
+          id.textContent = t.id;
+          const stage = document.createElement( 'div' );
+          stage.className = 'stage';
+          const frame = document.createElement( 'iframe' );
+          frame.src = page + '/0?demo=1&theme=' + encodeURIComponent( t.id );
+          frame.loading = 'lazy';
+          stage.append( frame );
+          cell.append( name, id, stage );
+          grid.append( cell );
+        }
+      };
+      fill( 'grid', '/bar' );
+      fill( 'chat-grid', '/chat' );
     } );
   </script>
 </body>

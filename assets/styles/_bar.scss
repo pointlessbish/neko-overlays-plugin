@@ -1,12 +1,3 @@
-// src/styles/info-bar/_bar.scss: the structure of the info bar, shared by pointlessbish.wtf (/overlay) and neko-overlays (/b/<token>).
-// This file is IDENTICAL in both projects, so a look added in one can be copied to the other without changes.
-//
-// DOM:  #info-bar[data-theme]  >  .main-container ( .stats-container | .spacer | .latest-container | .spacer | .train-container )
-//                              +  .train-bar
-// Everything you can change is a CSS custom property on #info-bar. The values below are the "classic" look; a theme
-// (_themes.scss) overrides them under #info-bar[data-theme='<id>'], and colours picked by a person (the ?accent= query on
-// the website, the colour pickers in the neko dashboard) are an inline style on #info-bar, which beats the theme.
-
 * {
   box-sizing: border-box;
 }
@@ -19,7 +10,6 @@ body {
   overflow: hidden;
 }
 
-// The neko dashboard previews the bar on a checkerboard so you can see what is transparent
 body.preview {
   background-color: #1d1d22;
   background-image: linear-gradient(45deg, #26262c 25%, transparent 25%, transparent 75%, #26262c 75%),
@@ -30,9 +20,9 @@ body.preview {
 
 #info-bar {
   --background-color: #260014;
-  --accent-color: #f1a6c0; // dividers (and the icons and the train, unless a theme says otherwise)
+  --accent-color: #f1a6c0;
   --text-color: #fdfffc;
-  --text-accent-color: #f1a6c0; // "3 Months", "100 Bits"
+  --text-accent-color: #f1a6c0;
   --icon-color: var(--accent-color);
   --train-color: var(--accent-color);
   --train-height: 8px;
@@ -41,7 +31,7 @@ body.preview {
   --widget-padding: 8px;
   --font-size: 16px;
   --font: 'Arya', cursive;
-  --inset: 0px; // empty space around the bar, for themes with a glow or rounded corners
+  --inset: 0px;
 
   position: relative;
   display: flex;
@@ -83,10 +73,9 @@ body.preview {
   width: 0;
   height: var(--train-height);
   background-color: var(--train-color);
-  transition: width 0.9s linear; // a little shorter than the 1 second tick, so it glides without lagging behind
+  transition: width 0.9s linear;
 }
 
-// Fade between one stat / event and the next
 .fade {
   transition: opacity 0.4s ease;
 

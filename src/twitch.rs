@@ -1,17 +1,3 @@
-// Location: neko-overlays-plugin/src/twitch.rs
-// File: twitch.rs
-
-//! Talks to Twitch directly: login (device code flow) and live channel data.
-//!
-//! One background thread logs in and polls Twitch's API (follower count and newest follower,
-//! subscriber count, viewers). A second thread (chat.rs) listens to your chat for subscriptions,
-//! cheers and watch streaks. Both write into the same snapshot, which the local server (server.rs)
-//! hands to the info bar page. OBS's render thread never waits on the network.
-//!
-//! Login uses Twitch's "device code" flow, which needs no client secret: you register a
-//! *public* app at https://dev.twitch.tv/console, build its Client ID into the plugin (or paste
-//! it into the source properties), click "Connect to Twitch", and approve the code shown on the bar.
-
 use std::fs;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -22,24 +8,17 @@ use serde_json::{json, Value};
 
 use crate::{config_file, log_msg};
 
-/// The public Twitch app everyone logs in through, baked in at build time. build.rs reads it from
-/// the NEKO_TWITCH_CLIENT_ID environment variable or from `.env`. A Client ID is not a secret.
 const DEFAULT_CLIENT_ID: &str = match option_env!("NEKO_TWITCH_CLIENT_ID") {
     Some(id) => id,
     None => "",
 };
 
-/// chat:read is for the chat connection (subscriptions, cheers, watch streaks).
 const SCOPES: &str = "moderator:read:followers channel:read:subscriptions bits:read chat:read";
 const TOKEN_FILE: &str = "twitch.txt";
 const LATEST_FILE: &str = "latest.json";
 const POLL_EVERY: Duration = Duration::from_secs(15);
 const RETRY_EVERY: Duration = Duration::from_secs(20);
 
-// --- Public API ------------------------------------------------------------------
-
-/// One "latest ..." entry. `amount` is months (subscriber), bits (cheer) or streams in a row (streaker).
-/// `seq` only ever goes up, so the page can tell a new event from an old one.
 #[derive(Clone, Default)]
 pub struct Latest {
     pub name: String,
@@ -47,23 +26,18 @@ pub struct Latest {
     pub seq: u64,
 }
 
-/// One current subscriber, as listed by Twitch. `tier` is 1, 2 or 3.
 #[derive(Clone)]
 pub struct SubscriberEntry {
     pub name: String,
     pub tier: u8,
 }
 
-/// What the info bar shows. `status` is "Label|Value" while the user has something to do
-/// (or something is wrong); empty when everything is fine.
 #[derive(Clone, Default)]
 pub struct Snapshot {
     pub status: String,
-    /// The code the user has to enter on Twitch, while a login is waiting for them.
     pub login: Option<LoginPrompt>,
     pub followers: Option<u64>,
     pub subscribers: Option<u64>,
-    /// Everyone subscribed right now (not the broadcaster), for the bar to rotate through.
     pub subscriber_list: Vec<SubscriberEntry>,
     pub viewers: Option<u64>,
     pub latest_follower: Option<Latest>,
@@ -72,14 +46,12 @@ pub struct Snapshot {
     pub latest_streaker: Option<Latest>,
 }
 
-/// The code (and the address Twitch gave) shown on the local login page while a login is waiting.
 #[derive(Clone)]
 pub struct LoginPrompt {
     pub code: String,
     pub uri: String,
 }
 
-/// Which "latest" slot an event belongs to.
 #[derive(Clone, Copy)]
 pub enum Slot {
     Follower,
@@ -88,12 +60,10 @@ pub enum Slot {
     Streaker,
 }
 
-/// What the chat thread needs to log in to chat.
 #[derive(Clone)]
 pub struct ChatAuth {
     pub login: String,
     pub token: String,
-    /// Changes when somebody logs in or out, so the chat thread knows to reconnect.
     pub gen: u64,
 }
 
@@ -112,7 +82,7 @@ pub fn start() {
     crate::chat::start();
 }
 
-/// Stops the workers and waits for them. Must happen before OBS unloads the plugin.
+// Must run before OBS unloads the plugin.
 pub fn stop() {
     shared().stop.store(true, Ordering::SeqCst);
     crate::chat::stop();
@@ -126,7 +96,6 @@ pub fn stopping() -> bool {
     shared().stop.load(Ordering::SeqCst)
 }
 
-/// Sleeps in short slices so shutdown never waits long.
 pub fn pause(total: Duration) {
     nap(shared(), total);
 }
@@ -139,9 +108,13 @@ pub fn set_client_id(id: &str) {
     }
 }
 
+pub fn current_client_id() -> String {
+    let override_id = shared().client_id.lock().map(|id| id.clone()).unwrap_or_default();
+    if override_id.is_empty() { DEFAULT_CLIENT_ID.to_string() } else { override_id }
+}
+
 pub fn request_login() {
-    // A click while a login is already waiting must not queue a second one: it would start a new login (and a new
-    // code) the moment this one is approved. The login page just shows the code that is already there.
+    // A second click must not queue another login: it would start a new code the moment this one is approved.
     if shared().login_active.load(Ordering::SeqCst) {
         return;
     }
@@ -160,7 +133,6 @@ pub fn chat_auth() -> Option<ChatAuth> {
     shared().chat_auth.lock().ok().and_then(|auth| auth.clone())
 }
 
-/// The chat thread reports an event here. It becomes the new "latest ..." of its kind.
 pub fn record_event(slot: Slot, name: &str, amount: Option<u64>) {
     shared().update(|snap| {
         let target = slot_mut(snap, slot);
@@ -170,8 +142,6 @@ pub fn record_event(slot: Slot, name: &str, amount: Option<u64>) {
     save_latest();
 }
 
-/// Everything the info bar page needs besides its settings: the numbers, the latest events, and
-/// the message that takes over the bar while the user has something to do.
 pub fn state_json() -> Value {
     let snap = snapshot();
     let status = match snap.status.split_once('|') {
@@ -205,8 +175,6 @@ pub fn state_json() -> Value {
     })
 }
 
-// --- Latest events: JSON and the file they are kept in ----------------------------------
-
 fn slot_mut(snap: &mut Snapshot, slot: Slot) -> &mut Option<Latest> {
     match slot {
         Slot::Follower => &mut snap.latest_follower,
@@ -237,7 +205,6 @@ fn latest_from_json(value: &Value) -> Option<Latest> {
     Some(Latest { name, amount: value["amount"].as_u64(), seq: value["seq"].as_u64().unwrap_or(1).max(1) })
 }
 
-/// The latest events survive restarting OBS, so "latest subscriber" is still there tomorrow.
 fn save_latest() {
     let snap = snapshot();
     let Some(path) = config_file(LATEST_FILE) else { return };
@@ -265,14 +232,11 @@ fn load_latest() {
     });
 }
 
-// --- Shared state ------------------------------------------------------------------
-
 struct Shared {
     snapshot: Mutex<Snapshot>,
     version: AtomicU64,
     client_id: Mutex<String>,
     login_requested: AtomicBool,
-    /// True while a login is waiting for the user to approve it on Twitch.
     login_active: AtomicBool,
     logout_requested: AtomicBool,
     stop: AtomicBool,
@@ -288,7 +252,6 @@ impl Shared {
         self.version.fetch_add(1, Ordering::SeqCst);
     }
 
-    /// Only bumps the version when the text actually changes.
     fn set_status(&self, status: &str) {
         let changed = match self.snapshot.lock() {
             Ok(mut snap) if snap.status != status => {
@@ -305,8 +268,6 @@ impl Shared {
         }
     }
 
-    /// Hands the chat thread the current login. `bump` marks a login or logout (it reconnects);
-    /// a plain token refresh keeps the same generation, so the chat connection is left alone.
     fn publish_auth(&self, tokens: Option<&Tokens>, bump: bool) {
         if bump {
             self.auth_gen.fetch_add(1, Ordering::SeqCst);
@@ -341,7 +302,6 @@ fn shared() -> &'static Arc<Shared> {
     })
 }
 
-/// Sleeps in short slices so shutdown never waits long.
 fn nap(shared: &Shared, total: Duration) {
     let step = Duration::from_millis(100);
     let mut waited = Duration::ZERO;
@@ -350,8 +310,6 @@ fn nap(shared: &Shared, total: Duration) {
         waited += step;
     }
 }
-
-// --- Tokens --------------------------------------------------------------------------
 
 struct Tokens {
     access: String,
@@ -383,7 +341,6 @@ fn save_tokens(tokens: &Tokens) {
         log_msg("[neko-overlays-plugin] could not save the Twitch login");
         return;
     }
-    // The file holds a login token, so keep it private to this user.
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -397,10 +354,7 @@ fn delete_tokens() {
     }
 }
 
-// --- Worker ----------------------------------------------------------------------------
-
 enum PollError {
-    /// The refresh token no longer works; the user has to connect again.
     LoginExpired,
     Other(String),
 }
@@ -437,7 +391,6 @@ fn run(shared: Arc<Shared>) {
             });
         }
 
-        // The source property overrides the built-in Client ID (handy for testing your own app).
         let override_id = shared.client_id.lock().map(|id| id.clone()).unwrap_or_default();
         let client_id = if override_id.is_empty() { DEFAULT_CLIENT_ID.to_string() } else { override_id };
         if client_id.is_empty() {
@@ -450,7 +403,7 @@ fn run(shared: Arc<Shared>) {
             shared.login_active.store(true, Ordering::SeqCst);
             let outcome = device_login(&agent, &client_id, &shared);
             shared.login_active.store(false, Ordering::SeqCst);
-            shared.login_requested.store(false, Ordering::SeqCst); // clicks that came in during the login are dropped
+            shared.login_requested.store(false, Ordering::SeqCst);
             shared.update(|snap| snap.login = None);
             match outcome {
                 Ok(new_tokens) => {
@@ -479,7 +432,7 @@ fn run(shared: Arc<Shared>) {
         if Instant::now() >= next_poll {
             match poll_stats(&agent, &client_id, current, &shared) {
                 Ok(()) => {
-                    shared.publish_auth(Some(&*current), false); // the token may have been refreshed
+                    shared.publish_auth(Some(&*current), false);
                     shared.set_status("");
                     next_poll = Instant::now() + POLL_EVERY;
                 }
@@ -507,8 +460,6 @@ fn truncate(text: &str, max: usize) -> String {
     let cut: String = text.chars().take(max.saturating_sub(3)).collect();
     format!("{cut}...")
 }
-
-// --- Login (device code flow) ---------------------------------------------------------
 
 fn describe(error: ureq::Error) -> String {
     match error {
@@ -550,7 +501,6 @@ fn device_login(agent: &ureq::Agent, client_id: &str, shared: &Shared) -> Result
         if shared.stop.load(Ordering::SeqCst) {
             return Err(String::from("stopped"));
         }
-        // "Disconnect from Twitch" while a code is waiting: drop it. Then Connect gives a fresh one.
         if shared.logout_requested.load(Ordering::SeqCst) {
             return Err(String::from("Login cancelled"));
         }
@@ -573,13 +523,11 @@ fn device_login(agent: &ureq::Agent, client_id: &str, shared: &Shared) -> Result
             Err(ureq::Error::Status(_, response)) => {
                 let body: Value = response.into_json().unwrap_or_default();
                 match body["message"].as_str() {
-                    // Still waiting for the user to approve in the browser.
                     Some("authorization_pending") | Some("slow_down") => continue,
                     Some(other) => return Err(format!("Twitch login failed: {other}")),
                     None => return Err(String::from("Twitch login failed")),
                 }
             }
-            // A network hiccup while waiting: just try again on the next tick.
             Err(_) => continue,
         }
     }
@@ -623,9 +571,6 @@ fn refresh(agent: &ureq::Agent, client_id: &str, tokens: &mut Tokens) -> Result<
     }
 }
 
-// --- Helix (Twitch API) ----------------------------------------------------------------
-
-/// GET https://api.twitch.tv/helix/<path>. Refreshes the token once on a 401.
 fn helix_get(
     agent: &ureq::Agent,
     client_id: &str,
@@ -649,7 +594,6 @@ fn helix_get(
     Err(PollError::LoginExpired)
 }
 
-/// Looks up which account the token belongs to (needed as the broadcaster id).
 fn ensure_user(agent: &ureq::Agent, client_id: &str, tokens: &mut Tokens) -> Result<(), PollError> {
     if !tokens.user_id.is_empty() && !tokens.login.is_empty() {
         return Ok(());
@@ -665,9 +609,6 @@ fn ensure_user(agent: &ureq::Agent, client_id: &str, tokens: &mut Tokens) -> Res
     Ok(())
 }
 
-/// The subscriber total and everyone who is subscribed right now, without the broadcaster (Twitch lists the
-/// channel owner too, but leaves them out of `total`). The list is sorted by tier (highest first), then by name,
-/// so the order never depends on what Twitch happens to return.
 fn fetch_subscribers(
     agent: &ureq::Agent,
     client_id: &str,
@@ -704,7 +645,6 @@ fn fetch_subscribers(
             };
             list.push(SubscriberEntry { name: name.to_string(), tier });
         }
-        // Twitch also sends a cursor on the last page, so a short page is what ends the loop.
         match body["pagination"]["cursor"].as_str() {
             Some(cursor) if entries.len() >= PAGE && !cursor.is_empty() => after = cursor.to_string(),
             _ => break,
@@ -715,10 +655,8 @@ fn fetch_subscribers(
     Ok((total, list))
 }
 
-/// The last reason the subscriber count could not be read, so the log gets one line per problem, not one per poll.
 static SUBSCRIBER_PROBLEM: Mutex<String> = Mutex::new(String::new());
 
-/// `Some(reason)` when the subscriber request failed, `None` when it worked.
 fn note_subscriber_problem(problem: Option<&str>) {
     let Ok(mut last) = SUBSCRIBER_PROBLEM.lock() else { return };
     match problem {
@@ -750,13 +688,10 @@ fn poll_stats(
     ensure_user(agent, client_id, tokens)?;
     let id = tokens.user_id.clone();
 
-    // Newest follower comes first, and `total` is the follower count.
     let followers = helix_get(agent, client_id, tokens, &format!("channels/followers?broadcaster_id={id}&first=1"))?;
     let follower_total = followers["total"].as_u64();
     let newest_follower = followers["data"][0]["user_name"].as_str().map(str::to_string);
 
-    // Subscriber stats need their own permission and only exist for affiliates/partners, so a failure here isn't
-    // fatal for the other numbers. The last known count is kept, and the reason is written to the OBS log.
     let subscribers = match fetch_subscribers(agent, client_id, tokens, &id) {
         Ok(found) => {
             note_subscriber_problem(if found.0.is_none() { Some("Twitch sent no subscriber total") } else { None });
@@ -769,14 +704,12 @@ fn poll_stats(
         }
     };
 
-    // Viewers: the stream's viewer count, or 0 while offline. A failure keeps the last number.
     let stream = helix_get(agent, client_id, tokens, &format!("streams?user_id={id}")).ok();
     let viewers = stream.as_ref().map(|body| body["data"][0]["viewer_count"].as_u64().unwrap_or(0));
 
     let mut follower_changed = false;
     shared.update(|snap| {
         snap.followers = follower_total;
-        // A failed call keeps the last number and names instead of showing 0.
         if let Some((total, list)) = subscribers {
             if total.is_some() {
                 snap.subscribers = total;
@@ -786,8 +719,6 @@ fn poll_stats(
         if viewers.is_some() {
             snap.viewers = viewers;
         }
-        // A different newest follower than the one we know is a new follower. (Followers are not in chat,
-        // so this is found by polling, at most POLL_EVERY late.)
         if let Some(name) = newest_follower {
             let known = snap.latest_follower.as_ref().map(|l| l.name.as_str());
             if known != Some(name.as_str()) {

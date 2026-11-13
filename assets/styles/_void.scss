@@ -1,9 +1,3 @@
-// FILE: _void.scss  |  LOCATION: neko-overlays/src/styles/infobar/_void.scss
-// Info bar versions of the void14 styles: pill, fish, ocean, holo and halo, so every style in STYLES (src/lib/themes.ts) exists on the bar too.
-// neko-overlays only. DOM: #info-bar[data-theme] > .main-container (.stats-container | .spacer | .latest-container | .spacer | .train-container)
-// + .train-bar. The custom properties are documented in _bar.scss. Keep the colours in sync with STYLES in src/lib/themes.ts.
-
-// ---------- pill: a plain dark pill with a hairline border ----------
 #info-bar[data-theme='pill'] {
   --background-color: #121212;
   --accent-color: #00ffff;
@@ -39,11 +33,9 @@
   }
 }
 
-// ---------- fish: the flank of an arapaima ----------
-// Olive head, crimson tail, armoured scales, a gold eye on the left and a red tail fin that sways on the right. The train is the belly line.
 #info-bar[data-theme='fish'] {
   --background-color: #4f6045;
-  --accent-color: #e2b04a; // the eye
+  --accent-color: #e2b04a;
   --text-color: #fffaf0;
   --text-accent-color: #e2b04a;
   --font: 'Fredoka', 'Nunito', 'Segoe UI', sans-serif;
@@ -51,11 +43,11 @@
   --train-height: 5px;
   --spacer-width: 3px;
   --spacer-margin: 18px;
-  --widget-padding: 0 64px 0 62px; // clears the eye and gill on the left, the tail on the right
+  --widget-padding: 0 64px 0 62px;
   --inset: 8px;
   --fish-dark: color-mix(in srgb, var(--background-color) 60%, #000);
 
-  overflow: hidden; // the tail is drawn inside the right end, so it can never leave the bar
+  overflow: hidden;
   border-radius: 44px 10px 10px 44px / 50% 10px 10px 50%;
   border: 2px solid rgba(0, 0, 0, 0.45);
   background:
@@ -67,7 +59,6 @@
     linear-gradient(90deg, var(--fish-dark) 0%, var(--background-color) 28%, #7a6a3a 52%, #9a3a22 72%, #b3261e 100%) no-repeat;
   box-shadow: 0 4px 10px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.25);
 
-  // the eye
   &::before {
     content: '';
     position: absolute;
@@ -81,7 +72,6 @@
     box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6);
   }
 
-  // the tail fin
   &::after {
     content: '';
     position: absolute;
@@ -117,7 +107,6 @@
 }
 
 @keyframes bar-fish-tail {
-
   0%,
   100% {
     transform: rotate(-8deg);
@@ -128,8 +117,6 @@
   }
 }
 
-// ---------- ocean: a pane of deep water ----------
-// A foamy wave line slides along the top edge and bubbles drift up through the bar.
 #info-bar[data-theme='ocean'] {
   --background-color: #084869;
   --accent-color: #40e0d0;
@@ -152,7 +139,6 @@
     linear-gradient(160deg, color-mix(in srgb, var(--background-color) 88%, transparent) 0%, color-mix(in srgb, var(--ocean-deep) 90%, transparent) 100%);
   box-shadow: 0 0 14px color-mix(in srgb, var(--accent-color) 35%, transparent), inset 0 1px 0 rgba(255, 255, 255, 0.25);
 
-  // the foam line
   &::before {
     content: '';
     position: absolute;
@@ -164,7 +150,6 @@
     animation: bar-ocean-crest 4s linear infinite;
   }
 
-  // the bubbles
   &::after {
     content: '';
     position: absolute;
@@ -220,8 +205,6 @@
   }
 }
 
-// ---------- holo: a holographic comm panel ----------
-// Translucent navy glass with scanlines and a lightsaber blade down the left edge that ignites when the bar loads.
 #info-bar[data-theme='holo'] {
   --background-color: #040c1c;
   --accent-color: #4bd5ff;
@@ -232,7 +215,7 @@
   --train-height: 4px;
   --spacer-width: 1px;
   --spacer-margin: 20px;
-  --widget-padding: 0 30px 0 36px; // the blade sits in the left edge
+  --widget-padding: 0 30px 0 36px;
   --inset: 8px;
   --saber: #3d8bff;
 
@@ -245,7 +228,6 @@
     linear-gradient(100deg, color-mix(in srgb, var(--accent-color) 12%, var(--background-color)), color-mix(in srgb, var(--background-color) 82%, transparent) 60%);
   box-shadow: 0 0 16px color-mix(in srgb, var(--accent-color) 18%, transparent), inset 0 0 18px color-mix(in srgb, var(--accent-color) 8%, transparent);
 
-  // the blade
   &::before {
     content: '';
     position: absolute;
@@ -294,15 +276,13 @@
   }
 }
 
-// ---------- halo: a UNSC data plate ----------
-// A chamfered plate with a hex-grid texture, scanlines and a rolling scan beam. The train is the segmented shield bar along the bottom.
 $bar-hex-tile: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 13.86'%3E%3Cpath d='M0 6.93H4L8 0H16L20 6.93H24M4 6.93L8 13.86H16L20 6.93' fill='none' stroke='%2300f2ff' stroke-opacity='.1' stroke-width='.6'/%3E%3C/svg%3E");
 
 #info-bar[data-theme='halo'] {
   --background-color: #021218;
   --accent-color: #00f2ff;
   --text-color: #d4fbff;
-  --text-accent-color: #ffb02e; // the amber warning accent
+  --text-accent-color: #ffb02e;
   --font: 'Chakra Petch', 'Exo 2', 'Segoe UI', sans-serif;
   --font-size: 18px;
   --train-height: 5px;
@@ -312,16 +292,15 @@ $bar-hex-tile: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'
   --inset: 6px;
 
   isolation: isolate;
-  overflow: hidden; // keeps the CRT effects inside the plate
+  overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--accent-color) 25%, transparent);
   border-left: 4px solid var(--accent-color);
-  clip-path: polygon(0% 0%, calc(100% - 18px) 0%, 100% 18px, 100% 100%, 18px 100%, 0% calc(100% - 18px)); // chamfered corners
+  clip-path: polygon(0% 0%, calc(100% - 18px) 0%, 100% 18px, 100% 100%, 18px 100%, 0% calc(100% - 18px));
   background: linear-gradient(var(--text-accent-color), var(--text-accent-color)) 0 0 / 36px 2px no-repeat,
   #{$bar-hex-tile} 0 0 / 36px 20.8px,
   linear-gradient(100deg, color-mix(in srgb, var(--accent-color) 10%, var(--background-color)), color-mix(in srgb, var(--background-color) 95%, transparent) 60%);
   box-shadow: inset 0 0 22px color-mix(in srgb, var(--accent-color) 10%, transparent), inset 6px 0 14px -6px color-mix(in srgb, var(--accent-color) 45%, transparent);
 
-  // scanlines
   &::after {
     content: '';
     position: absolute;
@@ -333,7 +312,6 @@ $bar-hex-tile: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'
     animation: bar-halo-lines 0.25s linear infinite;
   }
 
-  // the rolling scan beam
   &::before {
     content: '';
     position: absolute;
@@ -352,7 +330,6 @@ $bar-hex-tile: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'
     background: transparent;
   }
 
-  // above the CRT effects
   .text {
     font-weight: 600;
     text-shadow: 0 1px 3px rgba(0, 0, 0, 1);
@@ -370,7 +347,6 @@ $bar-hex-tile: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'
     opacity: 0.5;
   }
 
-  // the train is a row of shield segments: its width still grows as before
   .train-bar {
     position: relative;
     z-index: 6;
@@ -399,7 +375,6 @@ $bar-hex-tile: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'
 }
 
 @media (prefers-reduced-motion: reduce) {
-
   #info-bar[data-theme='fish']::after,
   #info-bar[data-theme='ocean']::before,
   #info-bar[data-theme='ocean']::after,

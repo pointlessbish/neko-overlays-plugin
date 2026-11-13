@@ -1,12 +1,4 @@
-# Location: neko-overlays-plugin/.github/workflows/build.yml
-# File: build.yml
-#
-# Builds the plugin for Windows and Linux on GitHub's own machines, so no Windows PC is needed.
-#   - every push and pull request: builds both and keeps the zips as downloadable artifacts
-#   - a tag like v0.2.0: also publishes a GitHub release with both zips and checksums
-#
-# One-time setup: add the Twitch Client ID as a repository secret called NEKO_TWITCH_CLIENT_ID
-# (Settings > Secrets and variables > Actions). It is built into the plugin, the same as .env does locally.
+# Needs the repository secret NEKO_TWITCH_CLIENT_ID (built into the plugin, like .env locally).
 
 name: build
 
@@ -25,8 +17,8 @@ permissions:
   contents: read
 
 env:
-  # Use the oldest OBS you want to support: a plugin built against newer headers than the OBS running it can be
-  # refused. Override once with the "Run workflow" button, or for good with a repository variable called OBS_VERSION.
+  # Oldest OBS you want to support: a plugin built against newer headers than the running OBS can be refused.
+  # Override with the "Run workflow" button or the OBS_VERSION repository variable.
   OBS_VERSION: ${{ inputs.obs_version || vars.OBS_VERSION || '32.2.1' }}
 
 jobs:
@@ -70,7 +62,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
-      # --- Windows: Visual Studio tools on the PATH, the OBS headers, and obs.lib ---
+      # Windows
       - name: Visual Studio tools
         if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
@@ -82,8 +74,7 @@ jobs:
         shell: pwsh
         run: ./scripts/obs-sdk.ps1 -Version $env:OBS_VERSION
 
-      # bindgen needs libclang and the clang that goes with it. Visual Studio has its own, older clang on the PATH,
-      # and mixing the two gives "invalid conversion between vector type" errors. So name both explicitly.
+      # Name libclang and clang explicitly: the older clang from Visual Studio on the PATH breaks bindgen.
       - name: LLVM for bindgen
         if: runner.os == 'Windows'
         shell: pwsh
@@ -91,13 +82,13 @@ jobs:
           echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
           echo "CLANG_PATH=C:\Program Files\LLVM\bin\clang.exe" >> $env:GITHUB_ENV
 
-      # --- Linux: only the OBS headers (OBS itself provides libobs when it loads the plugin) ---
+      # Linux
       - name: OBS headers
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y clang-14 libclang-14-dev libsimde-dev
-          # the runner has several LLVM versions: use one libclang and its own clang, so their headers match
+          # Use one libclang and its own clang so their headers match
           echo "LIBCLANG_PATH=/usr/lib/llvm-14/lib" >> "$GITHUB_ENV"
           echo "CLANG_PATH=/usr/lib/llvm-14/bin/clang" >> "$GITHUB_ENV"
           git clone --quiet --depth 1 --branch "$OBS_VERSION" --filter=blob:none --sparse https://github.com/obsproject/obs-studio.git .obs-sdk/obs-studio
@@ -136,7 +127,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     permissions:
-      contents: write # to create the release
+      contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:

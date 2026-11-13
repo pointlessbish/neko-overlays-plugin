@@ -1,6 +1,3 @@
-# Location: neko-overlays-plugin/.cargo/config.toml
-# File: config.toml
-
-# Link the C runtime into neko-overlays-plugin.dll, so it does not depend on a particular Visual C++ redistributable being installed.
+# Link the C runtime so the dll needs no Visual C++ redistributable.
 [target.x86_64-pc-windows-msvc]
 rustflags = ["-C", "target-feature=+crt-static"]

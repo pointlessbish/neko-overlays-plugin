@@ -1,16 +1,3 @@
-// Location: neko-overlays-plugin/src/fonts.rs
-// File: fonts.rs
-
-//! Google Fonts, downloaded once when a style (or the Font box) asks for one, then kept on this computer.
-//!
-//! - The bar page never talks to Google. It asks the local server (`/api/font?family=Name`), the plugin
-//!   downloads the font in a background thread, and the page then loads it from `/fonts/<file>` like any other
-//!   local file. After the first time nothing leaves the computer for that font.
-//! - Only two hosts are ever contacted: fonts.googleapis.com (the stylesheet) and fonts.gstatic.com (the files).
-//! - Everything lands in the plugin's `fonts` config folder, the same one `/fonts.css` has always read from.
-//!   Each family gets one `<name>.css`; `/fonts.css` is all of those put together.
-//! - A source can switch this off ("Download Google Fonts" in its properties); then nothing is requested.
-
 use std::collections::HashMap;
 use std::io::Read;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -42,17 +29,12 @@ enum Job {
     Failed(Instant),
 }
 
-/// Families being downloaded right now, or that failed recently (so a typo is not retried every second).
 static JOBS: OnceLock<Mutex<HashMap<String, Job>>> = OnceLock::new();
-/// Goes up every time a font finishes downloading.
 static GENERATION: AtomicU32 = AtomicU32::new(0);
 
 const RETRY_AFTER: Duration = Duration::from_secs(60);
 const MAX_FILE_BYTES: u64 = 4_000_000;
-/// Google only sends woff2 files to browsers it recognizes.
 const USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
-/// Tried in this order: a family that has no 800 weight (or no weights at all) gets an error from Google for
-/// the longer ones, so fall back to what it does have.
 const WEIGHT_TRIES: [&str; 3] = [":wght@400;500;600;700;800", ":wght@400;700", ""];
 
 fn jobs() -> &'static Mutex<HashMap<String, Job>> {
@@ -63,7 +45,6 @@ pub fn generation() -> u32 {
     GENERATION.load(Ordering::SeqCst)
 }
 
-/// A family name is only used if it is plain letters, digits and spaces (it ends up in a URL and a file name).
 pub fn clean_family(name: &str) -> Option<String> {
     let name = name.trim();
     let plain = !name.is_empty() && name.len() <= 40 && name.chars().all(|c| c.is_ascii_alphanumeric() || c == ' ');
@@ -82,7 +63,6 @@ fn is_cached(family: &str) -> bool {
     config_file(&css_name(family)).is_some_and(|path| path.is_file())
 }
 
-/// Starts the download of a family if it is not on this computer yet, and says where it stands.
 pub fn request(family: &str) -> Status {
     let Some(family) = clean_family(family) else {
         return Status::Failed;
@@ -128,7 +108,6 @@ pub fn request(family: &str) -> Status {
     Status::Loading
 }
 
-/// Every cached stylesheet, put together. Served as `/fonts.css`.
 pub fn combined_css() -> Vec<u8> {
     let Some(folder) = config_file("fonts") else {
         return Vec::new();
@@ -152,8 +131,6 @@ pub fn combined_css() -> Vec<u8> {
     css
 }
 
-// --- The download -----------------------------------------------------------------------------
-
 fn fetch(agent: &ureq::Agent, url: &str, limit: u64) -> Result<Vec<u8>, String> {
     let response = agent
         .get(url)
@@ -172,7 +149,6 @@ fn fetch(agent: &ureq::Agent, url: &str, limit: u64) -> Result<Vec<u8>, String> 
     Ok(bytes)
 }
 
-/// A short stable file name for a font file's URL (FNV-1a, 64 bit).
 fn file_stem(url: &str) -> String {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for byte in url.bytes() {
@@ -186,7 +162,6 @@ fn download(family: &str) -> Result<(), String> {
     let agent = ureq::AgentBuilder::new().timeout(Duration::from_secs(15)).build();
     let plus = family.replace(' ', "+");
 
-    // 1. The stylesheet, with as many weights as the family has.
     let mut sheet = None;
     let mut last_error = String::new();
     for weights in WEIGHT_TRIES {
@@ -204,7 +179,6 @@ fn download(family: &str) -> Result<(), String> {
         return Err("Google sent no font".into());
     }
 
-    // 2. Every font file it points at, saved under a name made from its URL, and the stylesheet rewritten to match.
     const OPEN: &str = "url(";
     const HOST: &str = "https://fonts.gstatic.com/";
     let mut urls: Vec<String> = Vec::new();
@@ -241,7 +215,6 @@ fn download(family: &str) -> Result<(), String> {
         css = css.replace(url.as_str(), &format!("/fonts/{name}"));
     }
 
-    // 3. The stylesheet goes last: once it exists the family counts as downloaded.
     let path = config_file(&css_name(family)).ok_or("no config folder")?;
     let partial = path.with_extension("part");
     std::fs::write(&partial, css).map_err(|error| error.to_string())?;
