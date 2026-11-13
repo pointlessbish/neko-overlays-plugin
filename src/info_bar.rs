@@ -182,6 +182,7 @@ unsafe extern "C" fn on_connect(
 ) -> bool {
     log_info(c"[neko-overlays-plugin] Connect to Twitch clicked");
     twitch::request_login();
+    crate::server::open_connect_page();
     false
 }
 

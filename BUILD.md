@@ -118,18 +118,49 @@ different OBS version once, use the workflow's **Run workflow** button.
 - Twitch data comes straight from Twitch: the Helix API every 15 seconds (followers, newest follower, subscribers,
   viewers), and your own chat (read only) for subscriptions, cheers and watch streaks. Nothing goes through any other
   server.
+- Subscribers: `poll_stats` in `src/twitch.rs` calls `fetch_subscribers`, which reads `subscriptions` in pages of 100
+  (a short page ends the loop, because Twitch also sends a cursor on the last page). The count is Twitch's `total`, which
+  does not include the broadcaster; the list does, so the broadcaster's own entry is skipped. The names go to the bar as
+  `subscribers` in `/api/bar/<id>/state`, sorted by tier, then name, and `assets/bar.js` rotates through them
+  (`SUB_RUN` names in a row). A failed request keeps the last count and names; the reason is written to the OBS log once
+  (`note_subscriber_problem`), not on every poll.
+- The latest events (`latest.json`) and the login (`twitch.txt`) are kept in the plugin's config folder. See the README
+  for where that is.
 - Fonts: the bar page never contacts Google. The first time a style or the Font box needs a Google font, the plugin
   downloads it from `fonts.googleapis.com` / `fonts.gstatic.com` into its config folder (`fonts/`) and serves it from
   there. Until it is there the style's fallback font is shown. Your own `@font-face` CSS and font files can be dropped
   into that folder. The OBS log says what happened: lines starting with `[neko-overlays-plugin] downloaded Google font`
   or `could not get Google font`.
+- Logging in: the **Connect to Twitch** button starts Twitch's device code flow and opens `http://127.0.0.1:<port>/connect`
+  in the default browser (`rundll32` on Windows, `xdg-open` on Linux). That page (`assets/connect.html`) shows the code
+  to copy. The code is also on the bar, and in the OBS log.
 - The icons are simple built-in SVGs instead of Font Awesome. They are in `ICON_PATHS` in `assets/bar.js`.
+
+## Checking Twitch by hand
+
+Handy when a number on the bar looks wrong. Twitch only accepts a token together with the Client ID it was issued for, so
+use the Client ID the plugin was built with, and the token from the first line of `twitch.txt` (see the README for the
+folder). Never post the token anywhere.
+
+```
+# Which app, account and permissions does the token have? (no Client ID needed)
+curl -H "Authorization: OAuth <userAccessToken>" https://id.twitch.tv/oauth2/validate
+
+# The subscriber list the bar uses
+curl -H "Client-Id: <clientID>" -H "Authorization: Bearer <userAccessToken>" \
+  "https://api.twitch.tv/helix/subscriptions?broadcaster_id=<broadcasterID>&first=100"
+```
+
+`validate` shows `client_id`, `login`, `scopes` and `expires_in`; `channel:read:subscriptions` must be in `scopes`. The
+`<broadcasterID>` is the third line of `twitch.txt`. A browser cannot run the second command, because the token has to go in
+a header. A website that makes tokens with its own app (such as twitchtokengenerator.com) gives tokens for a different
+Client ID, which Twitch rejects with "Client ID and OAuth token do not match".
 
 ## Files
 
 - `src/lib.rs` the plugin entry point, `src/server.rs` local web server, `src/info_bar.rs` the OBS source,
   `src/twitch.rs` login and Helix, `src/chat.rs` chat, `src/fonts.rs` Google font download and cache
-- `assets/bar.js`, `assets/bar.html`, `assets/bar-extra.css`, `assets/gallery.html`, `assets/styles/*.scss` the bar page,
+- `assets/bar.js`, `assets/bar.html`, `assets/bar-extra.css`, `assets/gallery.html`, `assets/connect.html`, `assets/styles/*.scss` the bar page,
   the style gallery and the styles. To change a style, edit the SCSS and rebuild.
 - `build.rs` builds the OBS bindings, compiles the styles and reads the Client ID
 - `install.sh` build and install on Linux (Flatpak OBS), `scripts/obs-sdk.ps1` the Windows OBS headers and `obs.lib`

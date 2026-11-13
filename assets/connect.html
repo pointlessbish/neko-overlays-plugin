@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex" />
+  <title>Connect to Twitch</title>
+  <style>
+    :root {
+      --bg: #17111f;
+      --card: #261e30;
+      --line: #3d3349;
+      --text: #f1eaff;
+      --muted: #b4a6cc;
+      --purple: #8f73e0;
+      --orange: #ff8a1f;
+      --ok: #4be3a0;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 32px 16px;
+      background: var(--bg);
+      color: var(--text);
+      font: 16px/1.5 system-ui, sans-serif;
+    }
+
+    main {
+      position: relative;
+      width: min(100%, 440px);
+      padding: 28px;
+      text-align: center;
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+    }
+
+
+    h1 {
+      margin: 0 0 6px;
+      font-size: 22px;
+    }
+
+    p {
+      margin: 8px 0;
+      color: var(--muted);
+    }
+
+    p b {
+      color: var(--text);
+    }
+
+    #code {
+      width: 100%;
+      margin: 18px 0 14px;
+      padding: 14px 10px;
+      text-align: center;
+      font: 700 32px "Cascadia Mono", Consolas, "DejaVu Sans Mono", "Liberation Mono", ui-monospace, monospace;
+      letter-spacing: 0.12em;
+      color: var(--text);
+      background: var(--bg);
+      border: 1px solid var(--purple);
+      border-radius: 10px;
+      user-select: all;
+    }
+
+    .row {
+      display: flex;
+      gap: 10px;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+
+    button,
+    a.button {
+      font: 600 15px system-ui, sans-serif;
+      padding: 10px 18px;
+      border-radius: 8px;
+      border: 0;
+      cursor: pointer;
+      text-decoration: none;
+      color: #1a1020;
+      background: var(--orange);
+    }
+
+    button:hover,
+    a.button:hover {
+      filter: brightness(1.1);
+    }
+
+    button.secondary,
+    a.button.secondary {
+      color: #fff;
+      background: var(--purple);
+    }
+
+    #copied {
+      min-height: 1.5em;
+      color: var(--ok);
+    }
+
+    [hidden] {
+      display: none !important;
+    }
+  </style>
+</head>
+
+<body>
+  <main>
+    <h1>Connect to Twitch</h1>
+
+    <section id="wait">
+      <p id="wait-text">Getting a code from Twitch...</p>
+      <p>If nothing happens, click <b>Connect to Twitch</b> in the source's
+        properties in OBS.</p>
+    </section>
+
+    <section id="code-box" hidden>
+      <p><b>Open Twitch</b> copies the code and opens Twitch in this tab. Paste
+        it there and approve.</p>
+      <input id="code" type="text" readonly spellcheck="false"
+        autocomplete="off" aria-label="Twitch login code" />
+      <div class="row">
+        <button id="copy" type="button">Copy code</button>
+        <a id="open" class="button secondary"
+          href="https://www.twitch.tv/activate">Open Twitch</a>
+      </div>
+      <p id="copied"></p>
+      <p>Make sure the Twitch account you approve with is the one that owns your
+        channel.</p>
+    </section>
+
+    <section id="done" hidden>
+      <p><b>Connected.</b> You can close this page.</p>
+    </section>
+  </main>
+
+  <script>
+    const $ = ( id ) => document.getElementById( id );
+    const sections = [ 'wait', 'code-box', 'done' ];
+    const show = ( name ) => { for ( const id of sections ) $( id ).hidden = id !== name; };
+
+    // Only ever link to Twitch itself.
+    function twitchUrl ( uri )
+    {
+      try
+      {
+        const url = new URL( uri );
+        if ( url.protocol === 'https:' && ( url.hostname === 'twitch.tv' || url.hostname.endsWith( '.twitch.tv' ) ) ) return url.href;
+      } catch { /* fall through */ }
+      return 'https://www.twitch.tv/activate';
+    }
+
+    async function copyCode ()
+    {
+      const input = $( 'code' );
+      try
+      {
+        await navigator.clipboard.writeText( input.value );
+      } catch
+      {
+        input.select();
+        document.execCommand( 'copy' );
+      }
+      $( 'copied' ).textContent = 'Copied.';
+      setTimeout( () => { $( 'copied' ).textContent = ''; }, 2500 );
+    }
+    $( 'copy' ).addEventListener( 'click', copyCode );
+
+    // Copy the code first, then go to Twitch in this same tab (the code is in the clipboard, so losing this page is fine).
+    $( 'open' ).addEventListener( 'click', async ( event ) =>
+    {
+      event.preventDefault();
+      const target = $( 'open' ).href;
+      await copyCode();
+      location.assign( target );
+    } );
+
+    function render ( state )
+    {
+      if ( state.login )
+      {
+        if ( $( 'code' ).value !== state.login.code ) $( 'code' ).value = state.login.code; // not on every poll: it would clear a selection
+        $( 'open' ).href = twitchUrl( state.login.uri );
+        show( 'code-box' );
+      } else if ( state.status )
+      {
+        $( 'wait-text' ).textContent = state.status.label === 'Twitch' ? state.status.value : `${ state.status.label }: ${ state.status.value }`;
+        show( 'wait' );
+      } else
+      {
+        show( 'done' );
+      }
+    }
+
+    async function poll ()
+    {
+      try
+      {
+        const res = await fetch( '/api/login', { cache: 'no-store', signal: AbortSignal.timeout( 4000 ) } );
+        if ( res.ok ) render( await res.json() );
+      } catch { /* the plugin is busy for a moment: try again */ }
+      setTimeout( poll, 1000 );
+    }
+    void poll();
+  </script>
+</body>
+
+</html>

@@ -12,7 +12,8 @@
 //!   names shown on the bar and the bar's settings, never a Twitch token.
 //!
 //! Routes: /bar/<id> (the bar), /api/bar/<id>/state, /bar.css, /bar.js, /fonts.css, /fonts/<file>,
-//! /api/font?family=<name>, /api/themes and / (a gallery of every style with made-up numbers).
+//! /api/font?family=<name>, /api/themes and / (a gallery of every style with made-up numbers),
+//! plus /connect and /api/login (the page where the Twitch login code can be copied).
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, Ordering};
@@ -47,6 +48,7 @@ pub const THEMES: [(&str, &str); 12] = [
 
 const BAR_HTML: &str = include_str!("../assets/bar.html");
 const GALLERY_HTML: &str = include_str!("../assets/gallery.html");
+const CONNECT_HTML: &str = include_str!("../assets/connect.html");
 const BAR_JS: &str = include_str!("../assets/bar.js");
 const BAR_CSS: &str = include_str!(concat!(env!("OUT_DIR"), "/infobar.css"));
 const EXTRA_CSS: &str = include_str!("../assets/bar-extra.css");
@@ -237,6 +239,8 @@ fn handle(request: Request) {
             let body = json!({ "status": status.as_str(), "generation": fonts::generation() });
             reply_text(request, "application/json", &body.to_string());
         }
+        "/connect" => reply_text(request, "text/html; charset=utf-8", CONNECT_HTML),
+        "/api/login" => reply_text(request, "application/json", &twitch::state_json().to_string()),
         "/api/themes" => {
             let list: Vec<Value> = THEMES.iter().map(|(id, label)| json!({ "id": id, "label": label })).collect();
             reply_text(request, "application/json", &Value::Array(list).to_string());
@@ -324,4 +328,29 @@ fn read_font_file(name: &str) -> Option<Vec<u8>> {
         return None;
     }
     std::fs::read(config_file(&format!("fonts/{name}"))?).ok()
+}
+
+/// Opens the login page (/connect) in the default browser, so the Twitch code can be copied instead of typed.
+/// If it cannot be opened, the address is in the OBS log and the user can open it themselves.
+pub fn open_connect_page() {
+    let port = port();
+    if port == 0 {
+        return;
+    }
+    let url = format!("http://127.0.0.1:{port}/connect");
+
+    #[cfg(windows)]
+    let started = std::process::Command::new("rundll32").args(["url.dll,FileProtocolHandler", url.as_str()]).spawn();
+    #[cfg(not(windows))]
+    let started = std::process::Command::new("xdg-open").arg(url.as_str()).spawn();
+
+    match started {
+        Ok(mut child) => {
+            // Collect the finished helper process, so it does not linger.
+            thread::spawn(move || {
+                let _ = child.wait();
+            });
+        }
+        Err(_) => log_msg(&format!("[neko-overlays-plugin] could not open a browser: open {url} yourself")),
+    }
 }

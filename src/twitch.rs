@@ -47,18 +47,36 @@ pub struct Latest {
     pub seq: u64,
 }
 
+/// One current subscriber, as listed by Twitch. `tier` is 1, 2 or 3.
+#[derive(Clone)]
+pub struct SubscriberEntry {
+    pub name: String,
+    pub tier: u8,
+}
+
 /// What the info bar shows. `status` is "Label|Value" while the user has something to do
 /// (or something is wrong); empty when everything is fine.
 #[derive(Clone, Default)]
 pub struct Snapshot {
     pub status: String,
+    /// The code the user has to enter on Twitch, while a login is waiting for them.
+    pub login: Option<LoginPrompt>,
     pub followers: Option<u64>,
     pub subscribers: Option<u64>,
+    /// Everyone subscribed right now (not the broadcaster), for the bar to rotate through.
+    pub subscriber_list: Vec<SubscriberEntry>,
     pub viewers: Option<u64>,
     pub latest_follower: Option<Latest>,
     pub latest_subscriber: Option<Latest>,
     pub latest_cheer: Option<Latest>,
     pub latest_streaker: Option<Latest>,
+}
+
+/// The code (and the address Twitch gave) shown on the local login page while a login is waiting.
+#[derive(Clone)]
+pub struct LoginPrompt {
+    pub code: String,
+    pub uri: String,
 }
 
 /// Which "latest" slot an event belongs to.
@@ -122,6 +140,11 @@ pub fn set_client_id(id: &str) {
 }
 
 pub fn request_login() {
+    // A click while a login is already waiting must not queue a second one: it would start a new login (and a new
+    // code) the moment this one is approved. The login page just shows the code that is already there.
+    if shared().login_active.load(Ordering::SeqCst) {
+        return;
+    }
     shared().login_requested.store(true, Ordering::SeqCst);
 }
 
@@ -156,13 +179,23 @@ pub fn state_json() -> Value {
         None if !snap.status.is_empty() => json!({ "label": "Twitch", "value": snap.status }),
         None => Value::Null,
     };
+    let login = match &snap.login {
+        Some(prompt) => json!({ "code": prompt.code, "uri": prompt.uri }),
+        None => Value::Null,
+    };
     json!({
         "status": status,
+        "login": login,
         "counts": {
             "followers": snap.followers.unwrap_or(0),
             "subs": snap.subscribers.unwrap_or(0),
             "viewers": snap.viewers.unwrap_or(0),
         },
+        "subscribers": snap
+            .subscriber_list
+            .iter()
+            .map(|entry| json!({ "name": entry.name, "tier": entry.tier }))
+            .collect::<Vec<Value>>(),
         "latest": {
             "follower": latest_to_json(&snap.latest_follower),
             "subscriber": latest_to_json(&snap.latest_subscriber),
@@ -239,6 +272,8 @@ struct Shared {
     version: AtomicU64,
     client_id: Mutex<String>,
     login_requested: AtomicBool,
+    /// True while a login is waiting for the user to approve it on Twitch.
+    login_active: AtomicBool,
     logout_requested: AtomicBool,
     stop: AtomicBool,
     chat_auth: Mutex<Option<ChatAuth>>,
@@ -297,6 +332,7 @@ fn shared() -> &'static Arc<Shared> {
             version: AtomicU64::new(1),
             client_id: Mutex::new(String::new()),
             login_requested: AtomicBool::new(false),
+            login_active: AtomicBool::new(false),
             logout_requested: AtomicBool::new(false),
             stop: AtomicBool::new(false),
             chat_auth: Mutex::new(None),
@@ -396,6 +432,7 @@ fn run(shared: Arc<Shared>) {
                 snap.status = String::new();
                 snap.followers = None;
                 snap.subscribers = None;
+                snap.subscriber_list.clear();
                 snap.viewers = None;
             });
         }
@@ -410,7 +447,12 @@ fn run(shared: Arc<Shared>) {
         }
 
         if shared.login_requested.swap(false, Ordering::SeqCst) {
-            match device_login(&agent, &client_id, &shared) {
+            shared.login_active.store(true, Ordering::SeqCst);
+            let outcome = device_login(&agent, &client_id, &shared);
+            shared.login_active.store(false, Ordering::SeqCst);
+            shared.login_requested.store(false, Ordering::SeqCst); // clicks that came in during the login are dropped
+            shared.update(|snap| snap.login = None);
+            match outcome {
                 Ok(new_tokens) => {
                     save_tokens(&new_tokens);
                     log_msg(&format!("[neko-overlays-plugin] connected to Twitch as {}", new_tokens.login));
@@ -495,7 +537,11 @@ fn device_login(agent: &ureq::Agent, client_id: &str, shared: &Shared) -> Result
     let interval = start["interval"].as_u64().unwrap_or(5).max(1);
     let expires_in = start["expires_in"].as_u64().unwrap_or(600);
 
-    log_msg(&format!("[neko-overlays-plugin] Connect Twitch: open {uri} and enter code {user_code}"));
+    log_msg(&format!(
+        "[neko-overlays-plugin] Connect Twitch: open {uri} and enter code {user_code}  (or open http://127.0.0.1:{}/connect to copy the code)",
+        crate::server::port()
+    ));
+    shared.update(|snap| snap.login = Some(LoginPrompt { code: user_code.clone(), uri: uri.to_string() }));
     shared.set_status(&format!("Connect Twitch|twitch.tv/activate  code {user_code}"));
 
     let deadline = Instant::now() + Duration::from_secs(expires_in);
@@ -503,6 +549,10 @@ fn device_login(agent: &ureq::Agent, client_id: &str, shared: &Shared) -> Result
         nap(shared, Duration::from_secs(interval));
         if shared.stop.load(Ordering::SeqCst) {
             return Err(String::from("stopped"));
+        }
+        // "Disconnect from Twitch" while a code is waiting: drop it. Then Connect gives a fresh one.
+        if shared.logout_requested.load(Ordering::SeqCst) {
+            return Err(String::from("Login cancelled"));
         }
         if Instant::now() >= deadline {
             return Err(String::from("Login timed out: click Connect to Twitch again"));
@@ -615,6 +665,82 @@ fn ensure_user(agent: &ureq::Agent, client_id: &str, tokens: &mut Tokens) -> Res
     Ok(())
 }
 
+/// The subscriber total and everyone who is subscribed right now, without the broadcaster (Twitch lists the
+/// channel owner too, but leaves them out of `total`). The list is sorted by tier (highest first), then by name,
+/// so the order never depends on what Twitch happens to return.
+fn fetch_subscribers(
+    agent: &ureq::Agent,
+    client_id: &str,
+    tokens: &mut Tokens,
+    broadcaster_id: &str,
+) -> Result<(Option<u64>, Vec<SubscriberEntry>), PollError> {
+    const PAGE: usize = 100;
+    let mut total = None;
+    let mut list: Vec<SubscriberEntry> = Vec::new();
+    let mut after = String::new();
+
+    for page in 0..20 {
+        let mut path = format!("subscriptions?broadcaster_id={broadcaster_id}&first={PAGE}");
+        if !after.is_empty() {
+            path.push_str(&format!("&after={after}"));
+        }
+        let body = helix_get(agent, client_id, tokens, &path)?;
+        if page == 0 {
+            total = body["total"].as_u64();
+        }
+        let entries = body["data"].as_array().map(Vec::as_slice).unwrap_or(&[]);
+        for entry in entries {
+            if entry["user_id"].as_str() == Some(broadcaster_id) {
+                continue;
+            }
+            let name = entry["user_name"].as_str().unwrap_or("");
+            if name.is_empty() {
+                continue;
+            }
+            let tier = match entry["tier"].as_str() {
+                Some("3000") => 3,
+                Some("2000") => 2,
+                _ => 1,
+            };
+            list.push(SubscriberEntry { name: name.to_string(), tier });
+        }
+        // Twitch also sends a cursor on the last page, so a short page is what ends the loop.
+        match body["pagination"]["cursor"].as_str() {
+            Some(cursor) if entries.len() >= PAGE && !cursor.is_empty() => after = cursor.to_string(),
+            _ => break,
+        }
+    }
+
+    list.sort_by(|a, b| b.tier.cmp(&a.tier).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
+    Ok((total, list))
+}
+
+/// The last reason the subscriber count could not be read, so the log gets one line per problem, not one per poll.
+static SUBSCRIBER_PROBLEM: Mutex<String> = Mutex::new(String::new());
+
+/// `Some(reason)` when the subscriber request failed, `None` when it worked.
+fn note_subscriber_problem(problem: Option<&str>) {
+    let Ok(mut last) = SUBSCRIBER_PROBLEM.lock() else { return };
+    match problem {
+        Some(reason) if *last != reason => {
+            let hint = if reason.to_lowercase().contains("scope") {
+                " (the login lacks the subscriber permission: click Disconnect, then Connect to Twitch)"
+            } else {
+                ""
+            };
+            log_msg(&format!("[neko-overlays-plugin] subscriber count unavailable: {reason}{hint}"));
+            *last = reason.to_string();
+        }
+        Some(_) => {}
+        None => {
+            if !last.is_empty() {
+                log_msg("[neko-overlays-plugin] subscriber count is working again");
+                last.clear();
+            }
+        }
+    }
+}
+
 fn poll_stats(
     agent: &ureq::Agent,
     client_id: &str,
@@ -629,9 +755,19 @@ fn poll_stats(
     let follower_total = followers["total"].as_u64();
     let newest_follower = followers["data"][0]["user_name"].as_str().map(str::to_string);
 
-    // Subscriber stats only exist for affiliates/partners, so a failure here isn't fatal.
-    let subscribers = helix_get(agent, client_id, tokens, &format!("subscriptions?broadcaster_id={id}&first=1")).ok();
-    let subscriber_total = subscribers.as_ref().and_then(|body| body["total"].as_u64());
+    // Subscriber stats need their own permission and only exist for affiliates/partners, so a failure here isn't
+    // fatal for the other numbers. The last known count is kept, and the reason is written to the OBS log.
+    let subscribers = match fetch_subscribers(agent, client_id, tokens, &id) {
+        Ok(found) => {
+            note_subscriber_problem(if found.0.is_none() { Some("Twitch sent no subscriber total") } else { None });
+            Some(found)
+        }
+        Err(PollError::LoginExpired) => return Err(PollError::LoginExpired),
+        Err(PollError::Other(message)) => {
+            note_subscriber_problem(Some(&message));
+            None
+        }
+    };
 
     // Viewers: the stream's viewer count, or 0 while offline. A failure keeps the last number.
     let stream = helix_get(agent, client_id, tokens, &format!("streams?user_id={id}")).ok();
@@ -640,7 +776,13 @@ fn poll_stats(
     let mut follower_changed = false;
     shared.update(|snap| {
         snap.followers = follower_total;
-        snap.subscribers = subscriber_total;
+        // A failed call keeps the last number and names instead of showing 0.
+        if let Some((total, list)) = subscribers {
+            if total.is_some() {
+                snap.subscribers = total;
+            }
+            snap.subscriber_list = list;
+        }
         if viewers.is_some() {
             snap.viewers = viewers;
         }

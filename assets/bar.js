@@ -9,6 +9,7 @@
   const FADE_MS = 400; // matches the transition in _bar.scss
   const TRAIN_TICK_MS = 1000;
   const POLL_MS = 1000;
+  const SUB_RUN = 3; // how many subscribers are shown in a row before the rotation moves on to the next kind of event
 
   const COUNT_KEYS = ['followers', 'subs', 'viewers'];
   const LATEST_KEYS = ['follower', 'subscriber', 'cheer', 'streaker'];
@@ -74,6 +75,7 @@
   let statsEl = null, latestEl = null, trainCountEl = null, trainBarEl = null;
   let statKeys = [], latestKeys = [];
   let statPos = 0, latestPos = 0;
+  let subPos = 0, subRun = 0; // where the rotation through the subscriber names is
   let shownStat = null, shownLatest = null;
   let trainWidth = 0; // percent
   let trainCount = 0;
@@ -93,7 +95,15 @@
 
   // ---------- the text of one stat / event ----------
   const statLine = (key) => line(String(state?.counts[key] ?? 0), icon(ICONS[key]));
-  function latestLine(key) {
+  /** `rotating` is the normal rotation: the subscriber slot then walks through everyone who is subscribed, with their tier.
+   *  A new event that arrives live is always shown as itself (name and months), and the list is the fallback when there is no list. */
+  function latestLine(key, rotating = false) {
+    const subscribers = state?.subscribers ?? [];
+    if (rotating && key === 'subscriber' && subscribers.length) {
+      const who = subscribers[subPos % subscribers.length];
+      subPos = (subPos + 1) % subscribers.length;
+      return line(who.name, accent(`Tier ${who.tier}`), icon(ICONS[key]));
+    }
     const event = state?.latest[key] ?? null;
     if (!event) return line(EMPTY[key], icon(ICONS[key]));
     switch (key) {
@@ -127,7 +137,15 @@
   function rotate() {
     if (!state) return;
     if (statsEl && statKeys.length) { shownStat = statKeys[statPos]; swap(statsEl, statLine(shownStat)); statPos = (statPos + 1) % statKeys.length; }
-    if (latestEl && latestKeys.length) { shownLatest = latestKeys[latestPos]; swap(latestEl, latestLine(shownLatest)); latestPos = (latestPos + 1) % latestKeys.length; }
+    if (latestEl && latestKeys.length) {
+      shownLatest = latestKeys[latestPos];
+      swap(latestEl, latestLine(shownLatest, true));
+      // Stay on the subscribers for a few names in a row, then carry on with the next kind of event.
+      const listed = shownLatest === 'subscriber' ? (state.subscribers?.length ?? 0) : 0;
+      if (listed > 1 && ++subRun < Math.min(SUB_RUN, listed)) return;
+      subRun = 0;
+      latestPos = (latestPos + 1) % latestKeys.length;
+    }
   }
 
   function drawTrain() {
@@ -214,6 +232,7 @@
     statKeys = COUNT_KEYS.filter((k) => settings.stats[k]);
     latestKeys = LATEST_KEYS.filter((k) => settings.latest[k]);
     statPos = latestPos = 0;
+    subPos = subRun = 0;
     shownStat = shownLatest = null;
 
     statsEl = statKeys.length ? el('div', 'stats-container component fade') : null;
@@ -275,6 +294,7 @@
     const fresh = latestKeys.filter((k) => (next.latest[k]?.seq ?? 0) > (previous.latest[k]?.seq ?? 0));
     if (latestEl && fresh.length) {
       shownLatest = fresh[fresh.length - 1];
+      subRun = 0;
       swap(latestEl, latestLine(shownLatest));
       latestPos = (latestKeys.indexOf(shownLatest) + 1) % latestKeys.length;
     } else if (latestEl && shownLatest && JSON.stringify(previous.latest[shownLatest]) !== JSON.stringify(next.latest[shownLatest])) {
@@ -285,7 +305,7 @@
   function handle(data) {
     const changed = data.v !== version;
     if (changed) { version = data.v; settings = withOverride(data.settings); }
-    const next = { counts: data.counts, latest: data.latest };
+    const next = { counts: data.counts, latest: data.latest, subscribers: data.subscribers ?? [] };
 
     if (data.status) {
       const key = `${data.status.label}|${data.status.value}`;
@@ -316,6 +336,7 @@
   // ---------- demo (the style gallery, or ?demo=1 in any browser) ----------
   const demoState = () => ({
     counts: { followers: 1284, subs: 86, viewers: 42 },
+    subscribers: [{ name: 'Relfy10', tier: 3 }, { name: 'NekoFan', tier: 2 }, { name: 'SogFan', tier: 1 }, { name: 'SomeoneNice', tier: 1 }],
     latest: {
       follower: { name: 'NekoFan', seq: 1 },
       subscriber: { name: 'Relfy10', amount: 12, seq: 1 },
