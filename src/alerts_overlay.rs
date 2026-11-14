@@ -30,10 +30,47 @@ const BROWSER_CSS: &CStr =
 
 struct AlertsOverlay {
     browser: *mut obs_source_t,
+    // The Neko Alerts source itself: the page's sound is handed to it, so it gets its own channel in OBS's Audio Mixer.
+    source: *mut obs_source_t,
     id: u32,
     width: u32,
     height: u32,
-    applied: Option<(String, u32, u32)>,
+    // "Play alert sounds through OBS": the browser source sends its sound to OBS instead of the default output.
+    route_audio: bool,
+    applied: Option<(String, u32, u32, bool)>,
+}
+
+// libobs enum values (audio-io.h): AUDIO_FORMAT_FLOAT_PLANAR is the format capture callbacks deliver.
+const AUDIO_FORMAT_FLOAT_PLANAR: u32 = 8;
+// obs_monitoring_type (obs-audio-controls / obs-source.h): 2 = monitor and output.
+const OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT: u32 = 2;
+
+// Called by OBS on its audio thread with the sound the inner browser source produced. Hands it to the Neko Alerts
+// source (`param`), which is what the Audio Mixer shows, so its volume, mute, monitoring and tracks work as usual.
+unsafe extern "C" fn forward_audio(
+    param: *mut c_void,
+    _browser: *mut obs_source_t,
+    audio: *const audio_data,
+    muted: bool,
+) {
+    if param.is_null() || audio.is_null() || muted {
+        return;
+    }
+    let mut format: obs_audio_info = std::mem::zeroed();
+    if !obs_get_audio_info(&mut format) {
+        return;
+    }
+    let audio = &*audio;
+    let mut out: obs_source_audio = std::mem::zeroed();
+    for (i, plane) in audio.data.iter().enumerate() {
+        out.data[i] = *plane as *const u8;
+    }
+    out.frames = audio.frames;
+    out.speakers = format.speakers;
+    out.format = AUDIO_FORMAT_FLOAT_PLANAR as _;
+    out.samples_per_sec = format.samples_per_sec;
+    out.timestamp = audio.timestamp;
+    obs_source_output_audio(param as *mut obs_source_t, &out);
 }
 
 unsafe fn get_str(settings: *mut obs_data_t, name: &CStr) -> String {
@@ -188,7 +225,12 @@ unsafe fn apply_browser(overlay: &mut AlertsOverlay) {
         return;
     }
     let url = server::alerts_url(overlay.id);
-    let wanted = (url.clone(), overlay.width, overlay.height);
+    let wanted = (
+        url.clone(),
+        overlay.width,
+        overlay.height,
+        overlay.route_audio,
+    );
     if overlay.applied.as_ref() == Some(&wanted) {
         return;
     }
@@ -201,7 +243,8 @@ unsafe fn apply_browser(overlay: &mut AlertsOverlay) {
     obs_data_set_int(settings, c"height".as_ptr(), overlay.height as i64);
     obs_data_set_bool(settings, c"shutdown".as_ptr(), false);
     obs_data_set_bool(settings, c"restart_when_active".as_ptr(), false);
-    obs_data_set_bool(settings, c"reroute_audio".as_ptr(), false);
+    // true: the browser sends its sound to OBS (forward_audio passes it on to the Audio Mixer); false: default output.
+    obs_data_set_bool(settings, c"reroute_audio".as_ptr(), overlay.route_audio);
     obs_data_set_bool(settings, c"fps_custom".as_ptr(), false);
     obs_data_set_string(settings, c"css".as_ptr(), BROWSER_CSS.as_ptr());
     obs_source_update(overlay.browser, settings);
@@ -239,6 +282,7 @@ unsafe extern "C" fn alerts_get_defaults(settings: *mut obs_data_t) {
         obs_data_set_default_int(settings, key.as_ptr(), 0);
     }
     obs_data_set_default_int(settings, c"sound_volume".as_ptr(), 70);
+    obs_data_set_default_bool(settings, c"play_in_obs".as_ptr(), true);
     obs_data_set_default_bool(settings, c"show_text".as_ptr(), true);
 
     obs_data_set_default_int(settings, c"width".as_ptr(), 700);
@@ -510,6 +554,12 @@ unsafe extern "C" fn alerts_get_properties(_data: *mut c_void) -> *mut obs_prope
         .unwrap_or_default();
         obs_properties_add_int(props, duration.as_ptr(), duration_label.as_ptr(), 0, 60, 1);
     }
+    obs_properties_add_bool(
+        props,
+        c"play_in_obs".as_ptr(),
+        c"Play alert sounds through OBS (gives this source its own channel in the Audio Mixer)"
+            .as_ptr(),
+    );
     obs_properties_add_int(
         props,
         c"sound_volume".as_ptr(),
@@ -531,7 +581,7 @@ unsafe extern "C" fn alerts_get_properties(_data: *mut c_void) -> *mut obs_prope
 
 unsafe extern "C" fn alerts_create(
     settings: *mut obs_data_t,
-    _source: *mut obs_source_t,
+    source: *mut obs_source_t,
 ) -> *mut c_void {
     let start = obs_data_create();
     obs_data_set_string(start, c"url".as_ptr(), c"about:blank".as_ptr());
@@ -550,11 +600,20 @@ unsafe extern "C" fn alerts_create(
         return ptr::null_mut();
     }
 
+    obs_source_add_audio_capture_callback(browser, Some(forward_audio), source as *mut c_void);
+
+    // Starting points for a new source: on tracks 1 to 6, and monitored while still going to the stream. OBS applies the
+    // source's saved choices after this, so anything the user changes in the mixer sticks.
+    obs_source_set_audio_mixers(source, 0x3F);
+    obs_source_set_monitoring_type(source, OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT as _);
+
     let overlay = Box::into_raw(Box::new(AlertsOverlay {
         browser,
+        source,
         id: server::register_bar(),
         width: 700,
         height: 400,
+        route_audio: true,
         applied: None,
     }));
     alerts_update(overlay as *mut c_void, settings);
@@ -567,6 +626,11 @@ unsafe extern "C" fn alerts_destroy(data: *mut c_void) {
     }
     let overlay = Box::from_raw(data as *mut AlertsOverlay);
     server::remove_bar(overlay.id);
+    obs_source_remove_audio_capture_callback(
+        overlay.browser,
+        Some(forward_audio),
+        overlay.source as *mut c_void,
+    );
     obs_source_release(overlay.browser);
 }
 
@@ -575,6 +639,7 @@ unsafe extern "C" fn alerts_update(data: *mut c_void, settings: *mut obs_data_t)
 
     overlay.width = get_int(settings, c"width", 100, 4000) as u32;
     overlay.height = get_int(settings, c"height", 20, 4000) as u32;
+    overlay.route_audio = get_bool(settings, c"play_in_obs");
 
     server::update_bar(overlay.id, page_settings(settings));
     apply_browser(overlay);
@@ -614,7 +679,8 @@ pub fn register() {
     info.id = c"neko_alerts".as_ptr();
     info.type_ = 0;
     // CUSTOM_DRAW: the browser source draws itself; without the flag every frame fails with "gs_effect_loop: An effect is already active".
-    info.output_flags = (OBS_SOURCE_VIDEO | OBS_SOURCE_CUSTOM_DRAW) as u32;
+    // AUDIO: the source has an audio channel of its own (forward_audio fills it with the page's sound).
+    info.output_flags = (OBS_SOURCE_VIDEO | OBS_SOURCE_AUDIO | OBS_SOURCE_CUSTOM_DRAW) as u32;
     info.get_name = Some(alerts_get_name);
     info.create = Some(alerts_create);
     info.destroy = Some(alerts_destroy);
