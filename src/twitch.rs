@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fs;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -6,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
-use crate::{config_file, log_msg};
+use crate::{alerts, config_file, log_msg};
 
 const DEFAULT_CLIENT_ID: &str = match option_env!("NEKO_TWITCH_CLIENT_ID") {
     Some(id) => id,
@@ -71,7 +72,10 @@ pub fn start() {
     load_latest();
     let shared = Arc::clone(shared());
     shared.stop.store(false, Ordering::SeqCst);
-    match thread::Builder::new().name("neko-twitch".into()).spawn(move || run(shared)) {
+    match thread::Builder::new()
+        .name("neko-twitch".into())
+        .spawn(move || run(shared))
+    {
         Ok(handle) => {
             if let Ok(mut worker) = WORKER.lock() {
                 *worker = Some(handle);
@@ -109,8 +113,16 @@ pub fn set_client_id(id: &str) {
 }
 
 pub fn current_client_id() -> String {
-    let override_id = shared().client_id.lock().map(|id| id.clone()).unwrap_or_default();
-    if override_id.is_empty() { DEFAULT_CLIENT_ID.to_string() } else { override_id }
+    let override_id = shared()
+        .client_id
+        .lock()
+        .map(|id| id.clone())
+        .unwrap_or_default();
+    if override_id.is_empty() {
+        DEFAULT_CLIENT_ID.to_string()
+    } else {
+        override_id
+    }
 }
 
 pub fn request_login() {
@@ -126,7 +138,11 @@ pub fn request_logout() {
 }
 
 pub fn snapshot() -> Snapshot {
-    shared().snapshot.lock().map(|s| s.clone()).unwrap_or_default()
+    shared()
+        .snapshot
+        .lock()
+        .map(|s| s.clone())
+        .unwrap_or_default()
 }
 
 pub fn chat_auth() -> Option<ChatAuth> {
@@ -137,7 +153,11 @@ pub fn record_event(slot: Slot, name: &str, amount: Option<u64>) {
     shared().update(|snap| {
         let target = slot_mut(snap, slot);
         let seq = target.as_ref().map_or(0, |latest| latest.seq) + 1;
-        *target = Some(Latest { name: name.to_string(), amount, seq });
+        *target = Some(Latest {
+            name: name.to_string(),
+            amount,
+            seq,
+        });
     });
     save_latest();
 }
@@ -202,12 +222,18 @@ fn latest_from_json(value: &Value) -> Option<Latest> {
     if name.is_empty() {
         return None;
     }
-    Some(Latest { name, amount: value["amount"].as_u64(), seq: value["seq"].as_u64().unwrap_or(1).max(1) })
+    Some(Latest {
+        name,
+        amount: value["amount"].as_u64(),
+        seq: value["seq"].as_u64().unwrap_or(1).max(1),
+    })
 }
 
 fn save_latest() {
     let snap = snapshot();
-    let Some(path) = config_file(LATEST_FILE) else { return };
+    let Some(path) = config_file(LATEST_FILE) else {
+        return;
+    };
     if let Some(dir) = path.parent() {
         let _ = fs::create_dir_all(dir);
     }
@@ -221,9 +247,15 @@ fn save_latest() {
 }
 
 fn load_latest() {
-    let Some(path) = config_file(LATEST_FILE) else { return };
-    let Ok(text) = fs::read_to_string(path) else { return };
-    let Ok(value) = serde_json::from_str::<Value>(&text) else { return };
+    let Some(path) = config_file(LATEST_FILE) else {
+        return;
+    };
+    let Ok(text) = fs::read_to_string(path) else {
+        return;
+    };
+    let Ok(value) = serde_json::from_str::<Value>(&text) else {
+        return;
+    };
     shared().update(|snap| {
         snap.latest_follower = latest_from_json(&value["follower"]);
         snap.latest_subscriber = latest_from_json(&value["subscriber"]);
@@ -328,15 +360,25 @@ fn load_tokens() -> Option<Tokens> {
     if access.is_empty() || refresh.is_empty() {
         return None;
     }
-    Some(Tokens { access, refresh, user_id, login })
+    Some(Tokens {
+        access,
+        refresh,
+        user_id,
+        login,
+    })
 }
 
 fn save_tokens(tokens: &Tokens) {
-    let Some(path) = config_file(TOKEN_FILE) else { return };
+    let Some(path) = config_file(TOKEN_FILE) else {
+        return;
+    };
     if let Some(dir) = path.parent() {
         let _ = fs::create_dir_all(dir);
     }
-    let text = format!("{}\n{}\n{}\n{}\n", tokens.access, tokens.refresh, tokens.user_id, tokens.login);
+    let text = format!(
+        "{}\n{}\n{}\n{}\n",
+        tokens.access, tokens.refresh, tokens.user_id, tokens.login
+    );
     if fs::write(&path, text).is_err() {
         log_msg("[neko-overlays-plugin] could not save the Twitch login");
         return;
@@ -381,6 +423,7 @@ fn run(shared: Arc<Shared>) {
         if shared.logout_requested.swap(false, Ordering::SeqCst) {
             tokens = None;
             delete_tokens();
+            forget_followers();
             shared.publish_auth(None, true);
             shared.update(|snap| {
                 snap.status = String::new();
@@ -391,8 +434,16 @@ fn run(shared: Arc<Shared>) {
             });
         }
 
-        let override_id = shared.client_id.lock().map(|id| id.clone()).unwrap_or_default();
-        let client_id = if override_id.is_empty() { DEFAULT_CLIENT_ID.to_string() } else { override_id };
+        let override_id = shared
+            .client_id
+            .lock()
+            .map(|id| id.clone())
+            .unwrap_or_default();
+        let client_id = if override_id.is_empty() {
+            DEFAULT_CLIENT_ID.to_string()
+        } else {
+            override_id
+        };
         if client_id.is_empty() {
             shared.set_status("Twitch|No Client ID: paste yours in the properties");
             nap(&shared, Duration::from_millis(500));
@@ -408,9 +459,13 @@ fn run(shared: Arc<Shared>) {
             match outcome {
                 Ok(new_tokens) => {
                     save_tokens(&new_tokens);
-                    log_msg(&format!("[neko-overlays-plugin] connected to Twitch as {}", new_tokens.login));
+                    log_msg(&format!(
+                        "[neko-overlays-plugin] connected to Twitch as {}",
+                        new_tokens.login
+                    ));
                     shared.publish_auth(Some(&new_tokens), true);
                     tokens = Some(new_tokens);
+                    forget_followers();
                     next_poll = Instant::now();
                     shared.set_status("");
                 }
@@ -484,7 +539,9 @@ fn device_login(agent: &ureq::Agent, client_id: &str, shared: &Shared) -> Result
         .ok_or("Twitch did not return a device code")?
         .to_string();
     let user_code = start["user_code"].as_str().unwrap_or("?").to_string();
-    let uri = start["verification_uri"].as_str().unwrap_or("https://www.twitch.tv/activate");
+    let uri = start["verification_uri"]
+        .as_str()
+        .unwrap_or("https://www.twitch.tv/activate");
     let interval = start["interval"].as_u64().unwrap_or(5).max(1);
     let expires_in = start["expires_in"].as_u64().unwrap_or(600);
 
@@ -492,8 +549,15 @@ fn device_login(agent: &ureq::Agent, client_id: &str, shared: &Shared) -> Result
         "[neko-overlays-plugin] Connect Twitch: open {uri} and enter code {user_code}  (or open http://127.0.0.1:{}/connect to copy the code)",
         crate::server::port()
     ));
-    shared.update(|snap| snap.login = Some(LoginPrompt { code: user_code.clone(), uri: uri.to_string() }));
-    shared.set_status(&format!("Connect Twitch|twitch.tv/activate  code {user_code}"));
+    shared.update(|snap| {
+        snap.login = Some(LoginPrompt {
+            code: user_code.clone(),
+            uri: uri.to_string(),
+        })
+    });
+    shared.set_status(&format!(
+        "Connect Twitch|twitch.tv/activate  code {user_code}"
+    ));
 
     let deadline = Instant::now() + Duration::from_secs(expires_in);
     loop {
@@ -505,7 +569,9 @@ fn device_login(agent: &ureq::Agent, client_id: &str, shared: &Shared) -> Result
             return Err(String::from("Login cancelled"));
         }
         if Instant::now() >= deadline {
-            return Err(String::from("Login timed out: click Connect to Twitch again"));
+            return Err(String::from(
+                "Login timed out: click Connect to Twitch again",
+            ));
         }
 
         let result = agent.post("https://id.twitch.tv/oauth2/token").send_form(&[
@@ -539,7 +605,12 @@ fn finish_login(agent: &ureq::Agent, client_id: &str, body: &Value) -> Result<To
         .ok_or("Twitch did not return an access token")?
         .to_string();
     let refresh = body["refresh_token"].as_str().unwrap_or("").to_string();
-    let mut tokens = Tokens { access, refresh, user_id: String::new(), login: String::new() };
+    let mut tokens = Tokens {
+        access,
+        refresh,
+        user_id: String::new(),
+        login: String::new(),
+    };
     ensure_user(agent, client_id, &mut tokens).map_err(PollError::into_message)?;
     Ok(tokens)
 }
@@ -555,7 +626,9 @@ fn refresh(agent: &ureq::Agent, client_id: &str, tokens: &mut Tokens) -> Result<
     ]);
     match result {
         Ok(response) => {
-            let body: Value = response.into_json().map_err(|e| PollError::Other(e.to_string()))?;
+            let body: Value = response
+                .into_json()
+                .map_err(|e| PollError::Other(e.to_string()))?;
             tokens.access = body["access_token"]
                 .as_str()
                 .ok_or(PollError::LoginExpired)?
@@ -566,7 +639,9 @@ fn refresh(agent: &ureq::Agent, client_id: &str, tokens: &mut Tokens) -> Result<
             save_tokens(tokens);
             Ok(())
         }
-        Err(ureq::Error::Status(400, _)) | Err(ureq::Error::Status(401, _)) => Err(PollError::LoginExpired),
+        Err(ureq::Error::Status(400, _)) | Err(ureq::Error::Status(401, _)) => {
+            Err(PollError::LoginExpired)
+        }
         Err(other) => Err(PollError::Other(describe(other))),
     }
 }
@@ -585,7 +660,9 @@ fn helix_get(
             .call();
         match result {
             Ok(response) => {
-                return response.into_json::<Value>().map_err(|e| PollError::Other(e.to_string()));
+                return response
+                    .into_json::<Value>()
+                    .map_err(|e| PollError::Other(e.to_string()));
             }
             Err(ureq::Error::Status(401, _)) if attempt == 0 => refresh(agent, client_id, tokens)?,
             Err(other) => return Err(PollError::Other(describe(other))),
@@ -643,22 +720,33 @@ fn fetch_subscribers(
                 Some("2000") => 2,
                 _ => 1,
             };
-            list.push(SubscriberEntry { name: name.to_string(), tier });
+            list.push(SubscriberEntry {
+                name: name.to_string(),
+                tier,
+            });
         }
         match body["pagination"]["cursor"].as_str() {
-            Some(cursor) if entries.len() >= PAGE && !cursor.is_empty() => after = cursor.to_string(),
+            Some(cursor) if entries.len() >= PAGE && !cursor.is_empty() => {
+                after = cursor.to_string()
+            }
             _ => break,
         }
     }
 
-    list.sort_by(|a, b| b.tier.cmp(&a.tier).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
+    list.sort_by(|a, b| {
+        b.tier
+            .cmp(&a.tier)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
     Ok((total, list))
 }
 
 static SUBSCRIBER_PROBLEM: Mutex<String> = Mutex::new(String::new());
 
 fn note_subscriber_problem(problem: Option<&str>) {
-    let Ok(mut last) = SUBSCRIBER_PROBLEM.lock() else { return };
+    let Ok(mut last) = SUBSCRIBER_PROBLEM.lock() else {
+        return;
+    };
     match problem {
         Some(reason) if *last != reason => {
             let hint = if reason.to_lowercase().contains("scope") {
@@ -666,7 +754,9 @@ fn note_subscriber_problem(problem: Option<&str>) {
             } else {
                 ""
             };
-            log_msg(&format!("[neko-overlays-plugin] subscriber count unavailable: {reason}{hint}"));
+            log_msg(&format!(
+                "[neko-overlays-plugin] subscriber count unavailable: {reason}{hint}"
+            ));
             *last = reason.to_string();
         }
         Some(_) => {}
@@ -679,6 +769,58 @@ fn note_subscriber_problem(problem: Option<&str>) {
     }
 }
 
+// Names of the newest followers seen this session. The first poll only fills it (so followers from while OBS was
+// closed do not all pop up at once); after that every name not in it is a new follower.
+static SEEN_FOLLOWERS: Mutex<Option<HashSet<String>>> = Mutex::new(None);
+
+fn forget_followers() {
+    if let Ok(mut seen) = SEEN_FOLLOWERS.lock() {
+        *seen = None;
+    }
+}
+
+/// Returns the (name, user id) pairs to alert for, oldest first. `recent` is Twitch's newest-first list.
+fn new_followers(recent: &[(String, String)]) -> Vec<(String, String)> {
+    let Ok(mut guard) = SEEN_FOLLOWERS.lock() else {
+        return Vec::new();
+    };
+    if guard.is_none() {
+        *guard = Some(recent.iter().map(|(name, _)| name.to_lowercase()).collect());
+        return Vec::new();
+    }
+    let Some(seen) = guard.as_mut() else {
+        return Vec::new();
+    };
+    let mut fresh: Vec<(String, String)> = Vec::new();
+    for (name, id) in recent {
+        if seen.insert(name.to_lowercase()) {
+            fresh.push((name.clone(), id.clone()));
+        }
+    }
+    if seen.len() > 500 {
+        *seen = recent.iter().map(|(name, _)| name.to_lowercase()).collect();
+    }
+    fresh.truncate(5);
+    fresh.reverse();
+    fresh
+}
+
+/// A viewer's chat colour ("#rrggbb"), or empty when they never picked one or Twitch does not answer. Needs no scope.
+fn chat_color(agent: &ureq::Agent, client_id: &str, tokens: &mut Tokens, user_id: &str) -> String {
+    if user_id.is_empty() {
+        return String::new();
+    }
+    helix_get(
+        agent,
+        client_id,
+        tokens,
+        &format!("chat/color?user_id={user_id}"),
+    )
+    .ok()
+    .and_then(|body| body["data"][0]["color"].as_str().map(str::to_string))
+    .unwrap_or_default()
+}
+
 fn poll_stats(
     agent: &ureq::Agent,
     client_id: &str,
@@ -688,13 +830,37 @@ fn poll_stats(
     ensure_user(agent, client_id, tokens)?;
     let id = tokens.user_id.clone();
 
-    let followers = helix_get(agent, client_id, tokens, &format!("channels/followers?broadcaster_id={id}&first=1"))?;
+    let followers = helix_get(
+        agent,
+        client_id,
+        tokens,
+        &format!("channels/followers?broadcaster_id={id}&first=10"),
+    )?;
     let follower_total = followers["total"].as_u64();
-    let newest_follower = followers["data"][0]["user_name"].as_str().map(str::to_string);
+    let recent_followers: Vec<(String, String)> = followers["data"]
+        .as_array()
+        .map(|list| {
+            list.iter()
+                .filter_map(|entry| {
+                    let name = entry["user_name"].as_str()?.to_string();
+                    Some((name, entry["user_id"].as_str().unwrap_or("").to_string()))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let newest_follower = recent_followers.first().map(|(name, _)| name.clone());
+    for (name, user_id) in new_followers(&recent_followers) {
+        let color = chat_color(agent, client_id, tokens, &user_id);
+        alerts::push(alerts::FOLLOW, &name, None, "", "", "", &color);
+    }
 
     let subscribers = match fetch_subscribers(agent, client_id, tokens, &id) {
         Ok(found) => {
-            note_subscriber_problem(if found.0.is_none() { Some("Twitch sent no subscriber total") } else { None });
+            note_subscriber_problem(if found.0.is_none() {
+                Some("Twitch sent no subscriber total")
+            } else {
+                None
+            });
             Some(found)
         }
         Err(PollError::LoginExpired) => return Err(PollError::LoginExpired),
@@ -705,7 +871,9 @@ fn poll_stats(
     };
 
     let stream = helix_get(agent, client_id, tokens, &format!("streams?user_id={id}")).ok();
-    let viewers = stream.as_ref().map(|body| body["data"][0]["viewer_count"].as_u64().unwrap_or(0));
+    let viewers = stream
+        .as_ref()
+        .map(|body| body["data"][0]["viewer_count"].as_u64().unwrap_or(0));
 
     let mut follower_changed = false;
     shared.update(|snap| {
@@ -723,7 +891,11 @@ fn poll_stats(
             let known = snap.latest_follower.as_ref().map(|l| l.name.as_str());
             if known != Some(name.as_str()) {
                 let seq = snap.latest_follower.as_ref().map_or(0, |l| l.seq) + 1;
-                snap.latest_follower = Some(Latest { name, amount: None, seq });
+                snap.latest_follower = Some(Latest {
+                    name,
+                    amount: None,
+                    seq,
+                });
                 follower_changed = true;
             }
         }

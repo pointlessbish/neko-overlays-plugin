@@ -98,20 +98,20 @@ different OBS version once, use the workflow's **Run workflow** button.
 
 ## If the build fails
 
-| Message                                        | Fix                                                                                                                                                                                               |
-| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `libobs not found` (Linux)                     | Install the OBS development files (see section 2), or set `OBS_INCLUDE_DIR`.                                                                                                                      |
-| `obs.lib not found` (Windows)                  | Run `./scripts/obs-sdk.ps1`, or set `OBS_LIB_DIR`.                                                                                                                                                |
-| `bindgen failed`                               | libclang is missing. Linux: install it. Windows: set `LIBCLANG_PATH`.                                                                                                                             |
-| `could not compile assets/styles/infobar.scss` | The built-in Sass compiler choked on a style. Compile it yourself: `npx sass --no-source-map assets/styles/infobar.scss assets/styles/infobar.css`. The build uses that `.css` file if it exists. |
-| The GitHub build fails on `--locked`           | `Cargo.lock` is out of date. Run `cargo build` locally and commit `Cargo.lock`.                                                                                                                   |
+| Message                                                                | Fix                                                                                                                                                                                                                                            |
+| ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `libobs not found` (Linux)                                             | Install the OBS development files (see section 2), or set `OBS_INCLUDE_DIR`.                                                                                                                                                                   |
+| `obs.lib not found` (Windows)                                          | Run `./scripts/obs-sdk.ps1`, or set `OBS_LIB_DIR`.                                                                                                                                                                                             |
+| `bindgen failed`                                                       | libclang is missing. Linux: install it. Windows: set `LIBCLANG_PATH`.                                                                                                                                                                          |
+| `could not compile assets/styles/infobar.scss` (or `chatoverlay.scss`) | The built-in Sass compiler choked on a style. Compile it yourself: `npx sass --no-source-map assets/styles/infobar.scss assets/styles/infobar.css` (same for `chatoverlay` and `alertsoverlay`). The build uses that `.css` file if it exists. |
+| The GitHub build fails on `--locked`                                   | `Cargo.lock` is out of date. Run `cargo build` locally and commit `Cargo.lock`.                                                                                                                                                                |
 
 ## How it works
 
 - The plugin starts a small web server on `127.0.0.1` (port 47831, or the next free one up to 47850). It only answers
   requests addressed to this computer, and it serves only the bar's settings and numbers, never your Twitch login.
-- The Neko Info Bar and Neko Chat sources each wrap an OBS browser source that shows their page from that server
-  (`/bar/<id>` and `/chat/<id>`). The page and its
+- The Neko Info Bar, Neko Chat and Neko Alerts sources each wrap an OBS browser source that shows their page from that server
+  (`/bar/<id>`, `/chat/<id>` and `/alerts/<id>`). The page and its
   styles (SCSS, compiled while building) are inside the plugin, so OBS needs its built-in Browser source.
 - Twitch data comes straight from Twitch: the Helix API every 15 seconds (followers, newest follower, subscribers,
   viewers), and your own chat (read only) for subscriptions, cheers, watch streaks and the Neko Chat messages. Nothing goes
@@ -131,6 +131,26 @@ different OBS version once, use the workflow's **Run workflow** button.
   pictures, and the 7TV / BTTV / FrankerFaceZ emote lists, straight from their servers (`static-cdn.jtvnw.net`,
   `badges.twitch.tv`, `cdn.7tv.app`, `7tv.io`, `betterttv.net`, `frankerfacez.com`). That is the only thing the pages load from
   the internet; a failure only means the emotes or badges are missing.
+- Neko Alerts: `src/alerts.rs` keeps the last 50 alert events (kind, name, amount, tier, message, gift recipient, each with
+  a sequence number). They are added from two places: `src/chat.rs` (`user_notice` for sub, resub, subgift,
+  submysterygift and raid; `cheer` for bits) and `poll_stats` in `src/twitch.rs` (followers, through `new_followers`, which
+  keeps the names seen this session so the first poll after connecting alerts nobody). A subgift that has a
+  `msg-param-community-gift-id` is part of a mass gift and gets no card of its own; the `submysterygift` notice makes one
+  card for all of them. The page (`assets/alerts.js`) polls `/api/alerts/<id>/state` twice a second, remembers the highest
+  sequence number it has seen (the first answer only sets it, so opening the page replays nothing), and plays the newer
+  events one at a time from a queue. The switches, minimums and duration are applied by the page, so editing them applies
+  at once. Each alert carries the viewer's Twitch chat colour (`color`): the `color` tag of the chat line for subs, gifts, raids and
+  cheers, and a Helix `chat/color` lookup (no scope needed) for each new follower. Only the finals style uses it:
+  `buildFinalsCard` in `assets/alerts.js` builds that style's one-line card, and the look is the `finals` block in
+  `assets/styles/alertsoverlay.scss`, kept the same as `neko-overlays/src/styles/overlay/themes/_finals.scss` of the web
+  version. Per-type times: `page_settings` sends `durations` (seconds per alert type, 0 = none set) and `secondsFor` in
+  `assets/alerts.js` picks the type's time or the general one. Custom files: `page_settings` in `src/alerts_overlay.rs` checks each picked file (`alerts::media_kind` allows a
+  fixed list of extensions; the file must exist) and puts the paths under `_files` in the source's settings, and which
+  slots have a file under `media`. `alerts_state` in `src/server.rs` removes `_files` before the page sees the settings.
+  The page loads a file from `/api/alerts/<id>/media/<type>/<visual|sound>`; `alert_media` looks the path up in the
+  settings, so nothing in the request names a file, and refuses anything over 100 MB. The page plays sounds with an audio
+  element on the browser source's own output (`reroute_audio` is off), which is why they only reach the stream through
+  Desktop Audio. The Test buttons in `src/alerts_overlay.rs` call `alerts::push_test`, which adds a made-up event to the same log.
 - The latest events (`latest.json`) and the login (`twitch.txt`) are kept in the plugin's config folder. See the README
   for where that is.
 - Fonts: the bar page never contacts Google. The first time a style or the Font box needs a Google font, the plugin
@@ -166,11 +186,13 @@ Client ID, which Twitch rejects with "Client ID and OAuth token do not match".
 ## Files
 
 - `src/lib.rs` the plugin entry point, `src/server.rs` local web server, `src/info_bar.rs` the Neko Info Bar OBS source,
-  `src/chat_overlay.rs` the Neko Chat OBS source, `src/twitch.rs` login and Helix, `src/chat.rs` the chat connection and
-  the chat log, `src/fonts.rs` Google font download and cache
-- `assets/bar.js`, `assets/bar.html`, `assets/bar-extra.css`, `assets/chat.js`, `assets/chat.html`, `assets/gallery.html`,
-  `assets/connect.html`, `assets/styles/*.scss` the bar and chat pages, the style gallery and the styles (`_chat.scss` is the
-  chat look of every style). To change a style, edit the SCSS and rebuild.
+  `src/chat_overlay.rs` the Neko Chat OBS source, `src/alerts_overlay.rs` the Neko Alerts OBS source, `src/alerts.rs` the
+  alert event log, `src/twitch.rs` login and Helix, `src/chat.rs` the chat connection and the chat log, `src/fonts.rs`
+  Google font download and cache
+- `assets/bar.js`, `assets/bar.html`, `assets/bar-extra.css`, `assets/chat.js`, `assets/chat.html`, `assets/alerts.js`,
+  `assets/alerts.html`, `assets/gallery.html`, `assets/connect.html`, `assets/styles/*.scss` the bar, chat and alerts pages,
+  the style gallery and the styles (`infobar.scss` is the look of every info bar style, `chatoverlay.scss` the look of every
+  chat style, `alertsoverlay.scss` the look of every alert style). To change a style, edit the SCSS and rebuild.
 - `build.rs` builds the OBS bindings, compiles the styles and reads the Client ID
 - `install.sh` build and install on Linux (Flatpak OBS), `scripts/obs-sdk.ps1` the Windows OBS headers and `obs.lib`
 - `.github/workflows/build.yml` the GitHub build and release, `.cargo/config.toml` the Windows runtime setting

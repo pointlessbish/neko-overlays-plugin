@@ -7,10 +7,13 @@ use std::time::Duration;
 use serde_json::{json, Value};
 use tiny_http::{Header, Request, Response, Server, StatusCode};
 
-use crate::{chat, config_file, fonts, log_msg, lookups, twitch};
+use crate::{alerts, chat, config_file, fonts, log_msg, lookups, twitch};
 
 const FIRST_PORT: u16 = 47831;
 const PORT_TRIES: u16 = 20;
+
+// Largest custom picture, video or sound file the alerts page may load.
+const MAX_MEDIA_BYTES: u64 = 100 * 1024 * 1024;
 
 pub const THEMES: [(&str, &str); 12] = [
     ("classic", "Classic"),
@@ -31,9 +34,13 @@ const BAR_HTML: &str = include_str!("../assets/bar.html");
 const GALLERY_HTML: &str = include_str!("../assets/gallery.html");
 const CONNECT_HTML: &str = include_str!("../assets/connect.html");
 const CHAT_HTML: &str = include_str!("../assets/chat.html");
+const ALERTS_HTML: &str = include_str!("../assets/alerts.html");
 const BAR_JS: &str = include_str!("../assets/bar.js");
 const CHAT_JS: &str = include_str!("../assets/chat.js");
+const ALERTS_JS: &str = include_str!("../assets/alerts.js");
 const BAR_CSS: &str = include_str!(concat!(env!("OUT_DIR"), "/infobar.css"));
+const CHAT_CSS: &str = include_str!(concat!(env!("OUT_DIR"), "/chatoverlay.css"));
+const ALERTS_CSS: &str = include_str!(concat!(env!("OUT_DIR"), "/alertsoverlay.css"));
 const EXTRA_CSS: &str = include_str!("../assets/bar-extra.css");
 const STARGATE_LINES: &str = include_str!("../assets/stargate-lines.svg");
 const STARGATE_STARS: &str = include_str!("../assets/stargate-stars.svg");
@@ -85,10 +92,35 @@ pub fn default_chat_settings() -> Value {
     })
 }
 
+pub fn default_alerts_settings() -> Value {
+    json!({
+        "theme": "classic",
+        "colors": {},
+        "font": null,
+        "fontSize": null,
+        "googleFonts": true,
+        "durationSeconds": 8,
+        "media": {},
+        "durations": {},
+        "soundVolume": 70,
+        "showText": true,
+        "types": { "follow": true, "sub": true, "gift": true, "cheer": true, "raid": true },
+        "minBits": 1,
+        "minRaiders": 1,
+        "showMessage": true
+    })
+}
+
 pub fn register_bar() -> u32 {
     let id = NEXT_ID.fetch_add(1, Ordering::SeqCst);
     if let Ok(mut all) = bars().lock() {
-        all.insert(id, Bar { settings: default_settings(), version: 1 });
+        all.insert(
+            id,
+            Bar {
+                settings: default_settings(),
+                version: 1,
+            },
+        );
     }
     id
 }
@@ -120,6 +152,10 @@ pub fn chat_url(id: u32) -> String {
     format!("http://127.0.0.1:{}/chat/{id}", port())
 }
 
+pub fn alerts_url(id: u32) -> String {
+    format!("http://127.0.0.1:{}/alerts/{id}", port())
+}
+
 pub fn start() {
     STOP.store(false, Ordering::SeqCst);
 
@@ -141,7 +177,10 @@ pub fn start() {
         port()
     ));
 
-    match thread::Builder::new().name("neko-server".into()).spawn(move || serve(server)) {
+    match thread::Builder::new()
+        .name("neko-server".into())
+        .spawn(move || serve(server))
+    {
         Ok(handle) => {
             if let Ok(mut worker) = WORKER.lock() {
                 *worker = Some(handle);
@@ -187,7 +226,12 @@ fn reply_text(request: Request, content_type: &str, body: &str) {
 }
 
 fn not_found(request: Request) {
-    reply(request, 404, "text/plain; charset=utf-8", b"Not found".to_vec());
+    reply(
+        request,
+        404,
+        "text/plain; charset=utf-8",
+        b"Not found".to_vec(),
+    );
 }
 
 // Only answer requests addressed to this computer (guards against DNS rebinding).
@@ -204,7 +248,12 @@ fn host_is_local(request: &Request) -> bool {
 
 fn handle(request: Request) {
     if !host_is_local(&request) {
-        reply(request, 403, "text/plain; charset=utf-8", b"Forbidden".to_vec());
+        reply(
+            request,
+            403,
+            "text/plain; charset=utf-8",
+            b"Forbidden".to_vec(),
+        );
         return;
     }
 
@@ -219,10 +268,18 @@ fn handle(request: Request) {
             let css = format!("{BAR_CSS}\n{EXTRA_CSS}");
             reply_text(request, "text/css; charset=utf-8", &css);
         }
+        "/chat.css" => reply_text(request, "text/css; charset=utf-8", CHAT_CSS),
+        "/alerts.js" => reply_text(request, "text/javascript; charset=utf-8", ALERTS_JS),
+        "/alerts.css" => reply_text(request, "text/css; charset=utf-8", ALERTS_CSS),
         "/stargate-lines.svg" => reply_text(request, "image/svg+xml", STARGATE_LINES),
         "/stargate-stars.svg" => reply_text(request, "image/svg+xml", STARGATE_STARS),
         "/fonts.css" => {
-            reply(request, 200, "text/css; charset=utf-8", fonts::combined_css());
+            reply(
+                request,
+                200,
+                "text/css; charset=utf-8",
+                fonts::combined_css(),
+            );
         }
         "/api/font" => {
             let family = query_value(&url, "family").unwrap_or_default();
@@ -232,17 +289,32 @@ fn handle(request: Request) {
         }
         "/api/badges" => {
             let room = query_value(&url, "room").unwrap_or_default();
-            reply_text(request, "application/json", &lookups::badges(&room).to_string());
+            reply_text(
+                request,
+                "application/json",
+                &lookups::badges(&room).to_string(),
+            );
         }
         "/api/avatars" => {
             let logins = query_value(&url, "logins").unwrap_or_default();
             let list: Vec<&str> = logins.split(',').collect();
-            reply_text(request, "application/json", &lookups::avatars(&list).to_string());
+            reply_text(
+                request,
+                "application/json",
+                &lookups::avatars(&list).to_string(),
+            );
         }
         "/connect" => reply_text(request, "text/html; charset=utf-8", CONNECT_HTML),
-        "/api/login" => reply_text(request, "application/json", &twitch::state_json().to_string()),
+        "/api/login" => reply_text(
+            request,
+            "application/json",
+            &twitch::state_json().to_string(),
+        ),
         "/api/themes" => {
-            let list: Vec<Value> = THEMES.iter().map(|(id, label)| json!({ "id": id, "label": label })).collect();
+            let list: Vec<Value> = THEMES
+                .iter()
+                .map(|(id, label)| json!({ "id": id, "label": label }))
+                .collect();
             reply_text(request, "application/json", &Value::Array(list).to_string());
         }
         _ => {
@@ -255,12 +327,36 @@ fn handle(request: Request) {
                 reply_text(request, "text/html; charset=utf-8", BAR_HTML);
             } else if path.starts_with("/chat/") {
                 reply_text(request, "text/html; charset=utf-8", CHAT_HTML);
-            } else if let Some(id) = path.strip_prefix("/api/chat/").and_then(|rest| rest.strip_suffix("/state")) {
+            } else if path.starts_with("/alerts/") {
+                reply_text(request, "text/html; charset=utf-8", ALERTS_HTML);
+            } else if let Some(rest) = path
+                .strip_prefix("/api/alerts/")
+                .filter(|rest| rest.contains("/media/"))
+            {
+                match alert_media(rest) {
+                    Some((bytes, content_type)) => reply(request, 200, content_type, bytes),
+                    None => not_found(request),
+                }
+            } else if let Some(id) = path
+                .strip_prefix("/api/alerts/")
+                .and_then(|rest| rest.strip_suffix("/state"))
+            {
+                match alerts_state(id) {
+                    Some(state) => reply_text(request, "application/json", &state.to_string()),
+                    None => not_found(request),
+                }
+            } else if let Some(id) = path
+                .strip_prefix("/api/chat/")
+                .and_then(|rest| rest.strip_suffix("/state"))
+            {
                 match chat_state(id) {
                     Some(state) => reply_text(request, "application/json", &state.to_string()),
                     None => not_found(request),
                 }
-            } else if let Some(id) = path.strip_prefix("/api/bar/").and_then(|rest| rest.strip_suffix("/state")) {
+            } else if let Some(id) = path
+                .strip_prefix("/api/bar/")
+                .and_then(|rest| rest.strip_suffix("/state"))
+            {
                 match bar_state(id) {
                     Some(state) => reply_text(request, "application/json", &state.to_string()),
                     None => not_found(request),
@@ -303,6 +399,55 @@ fn chat_state(id: &str) -> Option<Value> {
     Some(state)
 }
 
+fn alerts_state(id: &str) -> Option<Value> {
+    let id: u32 = id.parse().ok()?;
+    let (settings, version) = if id == 0 {
+        (default_alerts_settings(), 1)
+    } else {
+        let all = bars().lock().ok()?;
+        let bar = all.get(&id)?;
+        (bar.settings.clone(), bar.version)
+    };
+    // The file paths are for this server only; the page just gets what kind of file each slot holds.
+    let mut settings = settings;
+    if let Some(map) = settings.as_object_mut() {
+        map.remove("_files");
+    }
+    let mut state = alerts::state_json();
+    state["v"] = json!(version);
+    state["settings"] = settings;
+    state["status"] = twitch::state_json()["status"].clone();
+    Some(state)
+}
+
+/// Serves a custom file for an alert. `rest` is "<source id>/media/<alert type>/<visual|sound>". The file is looked up by
+/// what the user picked in that source's properties, never by a path from the request, so the page cannot ask for any
+/// other file on the computer.
+fn alert_media(rest: &str) -> Option<(Vec<u8>, &'static str)> {
+    let mut parts = rest.split('/');
+    let (id, marker, kind, slot) = (parts.next()?, parts.next()?, parts.next()?, parts.next()?);
+    if marker != "media" || parts.next().is_some() {
+        return None;
+    }
+    if !["follow", "sub", "gift", "cheer", "raid"].contains(&kind)
+        || !["visual", "sound"].contains(&slot)
+    {
+        return None;
+    }
+    let id: u32 = id.parse().ok()?;
+    let path = {
+        let all = bars().lock().ok()?;
+        let bar = all.get(&id)?;
+        bar.settings["_files"][kind][slot].as_str()?.to_string()
+    };
+    let (_, content_type) = alerts::media_kind(&path)?;
+    let meta = std::fs::metadata(&path).ok()?;
+    if !meta.is_file() || meta.len() > MAX_MEDIA_BYTES {
+        return None;
+    }
+    Some((std::fs::read(&path).ok()?, content_type))
+}
+
 fn query_value(url: &str, key: &str) -> Option<String> {
     let query = url.split_once('?')?.1;
     let raw = query.split('&').find_map(|pair| {
@@ -315,7 +460,10 @@ fn query_value(url: &str, key: &str) -> Option<String> {
     while i < bytes.len() {
         match bytes[i] {
             b'+' => out.push(b' '),
-            b'%' if i + 2 < bytes.len() && bytes[i + 1].is_ascii_hexdigit() && bytes[i + 2].is_ascii_hexdigit() => {
+            b'%' if i + 2 < bytes.len()
+                && bytes[i + 1].is_ascii_hexdigit()
+                && bytes[i + 2].is_ascii_hexdigit() =>
+            {
                 let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).ok()?;
                 out.push(u8::from_str_radix(hex, 16).ok()?);
                 i += 2;
@@ -341,7 +489,9 @@ fn read_font_file(name: &str) -> Option<Vec<u8>> {
     let plain = !name.is_empty()
         && name.len() <= 100
         && !name.starts_with('.')
-        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_');
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_');
     if !plain {
         return None;
     }
@@ -356,9 +506,13 @@ pub fn open_connect_page() {
     let url = format!("http://127.0.0.1:{port}/connect");
 
     #[cfg(windows)]
-    let started = std::process::Command::new("rundll32").args(["url.dll,FileProtocolHandler", url.as_str()]).spawn();
+    let started = std::process::Command::new("rundll32")
+        .args(["url.dll,FileProtocolHandler", url.as_str()])
+        .spawn();
     #[cfg(not(windows))]
-    let started = std::process::Command::new("xdg-open").arg(url.as_str()).spawn();
+    let started = std::process::Command::new("xdg-open")
+        .arg(url.as_str())
+        .spawn();
 
     match started {
         Ok(mut child) => {
@@ -366,6 +520,8 @@ pub fn open_connect_page() {
                 let _ = child.wait();
             });
         }
-        Err(_) => log_msg(&format!("[neko-overlays-plugin] could not open a browser: open {url} yourself")),
+        Err(_) => log_msg(&format!(
+            "[neko-overlays-plugin] could not open a browser: open {url} yourself"
+        )),
     }
 }

@@ -85,6 +85,19 @@
     .grid.chat iframe {
       height: 320px;
     }
+
+    .grid.alerts {
+      grid-template-columns: repeat(auto-fill, minmax(720px, 1fr));
+    }
+
+    .grid.alerts .stage,
+    .grid.alerts iframe {
+      width: 700px;
+    }
+
+    .grid.alerts iframe {
+      height: 260px;
+    }
   </style>
 </head>
 
@@ -96,10 +109,17 @@
     a fallback font for a few seconds the first time.</p>
   <div class="grid" id="grid"></div>
   <h2>Chat styles</h2>
-  <p>The Neko Chat source in the same styles, with made-up messages. The StreamElements message is hidden by the default
-    Hidden users list, and now and then a message is deleted, which removes it from the overlay. Emote and badge pictures
+  <p>The Neko Chat source in the same styles, with made-up messages. The
+    StreamElements message is hidden by the default
+    Hidden users list, and now and then a message is deleted, which removes it
+    from the overlay. Emote and badge pictures
     are loaded from their own servers, so they need an internet connection.</p>
   <div class="grid chat" id="chat-grid"></div>
+  <h2>Alert styles</h2>
+  <p>The Neko Alerts source in the same styles. Each one cycles through made-up
+    alerts: follower, subscriber, cheer,
+    resub, gifted sub, five gifted subs and a raid.</p>
+  <div class="grid alerts" id="alerts-grid"></div>
   <script>
     fetch( '/api/themes' ).then( ( r ) => r.json() ).then( ( themes ) =>
     {
@@ -126,6 +146,7 @@
       };
       fill( 'grid', '/bar' );
       fill( 'chat-grid', '/chat' );
+      fill( 'alerts-grid', '/alerts' );
     } );
   </script>
 </body>

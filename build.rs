@@ -31,7 +31,9 @@ fn load_client_id() {
                 continue;
             }
             let line = line.strip_prefix("export ").unwrap_or(line);
-            let Some((name, value)) = line.split_once('=') else { continue };
+            let Some((name, value)) = line.split_once('=') else {
+                continue;
+            };
             if name.trim() != KEY {
                 continue;
             }
@@ -46,25 +48,28 @@ fn load_client_id() {
     println!("cargo:warning={KEY} not found in the environment or .env: this build has no built-in Twitch Client ID");
 }
 
-/// Compiles the info bar styles into $OUT_DIR/infobar.css, which server.rs embeds in the plugin.
-/// If assets/styles/infobar.css exists (made with Dart Sass: `npx sass --no-source-map assets/styles/infobar.scss assets/styles/infobar.css`)
+/// Compiles assets/styles/infobar.scss, chatoverlay.scss and alertsoverlay.scss into $OUT_DIR/*.css, which server.rs embeds in the plugin.
+/// If assets/styles/<name>.css exists (made with Dart Sass: `npx sass --no-source-map assets/styles/<name>.scss assets/styles/<name>.css`)
 /// it is used as it is instead. That is the way out if the built-in Sass compiler ever chokes on a style.
 fn compile_styles() {
     println!("cargo:rerun-if-changed=assets/styles");
 
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
-    let out = PathBuf::from(env::var("OUT_DIR").unwrap()).join("infobar.css");
+    for name in ["infobar", "chatoverlay", "alertsoverlay"] {
+        let out = PathBuf::from(env::var("OUT_DIR").unwrap()).join(format!("{name}.css"));
 
-    let precompiled = manifest_dir.join("assets/styles/infobar.css");
-    if precompiled.exists() {
-        std::fs::copy(&precompiled, &out).expect("could not copy assets/styles/infobar.css");
-        return;
+        let precompiled = manifest_dir.join(format!("assets/styles/{name}.css"));
+        if precompiled.exists() {
+            std::fs::copy(&precompiled, &out)
+                .unwrap_or_else(|e| panic!("could not copy assets/styles/{name}.css: {e}"));
+            continue;
+        }
+
+        let entry = manifest_dir.join(format!("assets/styles/{name}.scss"));
+        let css = grass::from_path(entry.to_str().unwrap(), &grass::Options::default())
+            .unwrap_or_else(|e| panic!("could not compile assets/styles/{name}.scss: {e}"));
+        std::fs::write(&out, css).unwrap_or_else(|e| panic!("could not write {name}.css: {e}"));
     }
-
-    let entry = manifest_dir.join("assets/styles/infobar.scss");
-    let css = grass::from_path(entry.to_str().unwrap(), &grass::Options::default())
-        .unwrap_or_else(|e| panic!("could not compile assets/styles/infobar.scss: {e}"));
-    std::fs::write(&out, css).expect("could not write infobar.css");
 }
 
 fn main() {
@@ -92,7 +97,9 @@ fn main() {
 
     if target_os == "windows" {
         // Windows needs an import library for obs.dll (scripts/obs-sdk.ps1 makes it from the OBS install).
-        let lib_dir = env::var("OBS_LIB_DIR").map(PathBuf::from).unwrap_or_else(|_| sdk.join("lib"));
+        let lib_dir = env::var("OBS_LIB_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| sdk.join("lib"));
         assert!(
             lib_dir.join("obs.lib").exists(),
             "obs.lib not found in {}. Run scripts/obs-sdk.ps1, or set OBS_LIB_DIR to the folder containing obs.lib",
@@ -173,4 +180,4 @@ fn main() {
         .expect("bindgen failed (is libclang installed? on Windows set LIBCLANG_PATH to LLVM's bin folder)")
         .write_to_file(out.join("bindings.rs"))
         .expect("could not write bindings.rs");
-} 
+}

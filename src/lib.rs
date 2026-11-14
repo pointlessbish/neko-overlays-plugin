@@ -1,4 +1,9 @@
-#![allow(non_upper_case_globals, non_camel_case_types, non_snake_case, dead_code)]
+#![allow(
+    non_upper_case_globals,
+    non_camel_case_types,
+    non_snake_case,
+    dead_code
+)]
 
 mod ffi {
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
@@ -7,12 +12,14 @@ mod ffi {
 use std::ffi::{c_char, c_void};
 use std::sync::atomic::{AtomicPtr, Ordering};
 
+mod alerts;
+mod alerts_overlay;
 mod chat;
 mod chat_overlay;
 mod fonts;
 mod icons;
-mod lookups;
 mod info_bar;
+mod lookups;
 mod server;
 mod twitch;
 
@@ -52,6 +59,7 @@ pub extern "C" fn obs_module_load() -> bool {
     // icons::install(); // custom source icons crashed OBS 33.0.1, off until the cause is found
     info_bar::register();
     chat_overlay::register();
+    alerts_overlay::register();
     twitch::start();
     true
 }

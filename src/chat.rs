@@ -10,6 +10,7 @@ use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 use serde_json::{json, Value};
 
+use crate::alerts;
 use crate::log_msg;
 use crate::twitch::{self, ChatAuth, Slot};
 
@@ -37,7 +38,9 @@ pub fn stop() {
 }
 
 fn tls_config() -> Option<Arc<ClientConfig>> {
-    let roots = RootCertStore { roots: webpki_roots::TLS_SERVER_ROOTS.to_vec() };
+    let roots = RootCertStore {
+        roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
+    };
     let provider = Arc::new(rustls::crypto::ring::default_provider());
     let config = ClientConfig::builder_with_provider(provider)
         .with_safe_default_protocol_versions()
@@ -80,9 +83,12 @@ fn session(config: &Arc<ClientConfig>, auth: &ChatAuth) -> Result<(), String> {
         .map_err(|e| e.to_string())?
         .next()
         .ok_or_else(|| String::from("no address for the chat server"))?;
-    let tcp = TcpStream::connect_timeout(&address, Duration::from_secs(10)).map_err(|e| e.to_string())?;
-    tcp.set_read_timeout(Some(Duration::from_millis(500))).map_err(|e| e.to_string())?;
-    tcp.set_write_timeout(Some(Duration::from_secs(10))).map_err(|e| e.to_string())?;
+    let tcp =
+        TcpStream::connect_timeout(&address, Duration::from_secs(10)).map_err(|e| e.to_string())?;
+    tcp.set_read_timeout(Some(Duration::from_millis(500)))
+        .map_err(|e| e.to_string())?;
+    tcp.set_write_timeout(Some(Duration::from_secs(10)))
+        .map_err(|e| e.to_string())?;
 
     let name = ServerName::try_from(HOST).map_err(|e| e.to_string())?;
     let connection = ClientConnection::new(Arc::clone(config), name).map_err(|e| e.to_string())?;
@@ -153,15 +159,17 @@ fn handle_line(stream: &mut impl Write, line: &str) -> Result<Flow, String> {
         "001" => log_msg("[neko-overlays-plugin] chat connected"),
         "RECONNECT" => return Ok(Flow::Reconnect),
         "NOTICE" => {
-            if params.contains("authentication failed") || params.contains("Improperly formatted auth") {
+            if params.contains("authentication failed")
+                || params.contains("Improperly formatted auth")
+            {
                 return Err(String::from(
                     "Twitch refused the chat login. Click Connect to Twitch again so the chat permission is granted.",
                 ));
             }
         }
-        "USERNOTICE" => user_notice(&tags),
+        "USERNOTICE" => user_notice(&tags, params),
         "PRIVMSG" => {
-            cheer(&tags);
+            cheer(&tags, params);
             chat_message(&tags, prefix, params);
         }
         "CLEARMSG" => {
@@ -231,21 +239,100 @@ fn display_name(tags: &HashMap<&str, String>) -> String {
         .unwrap_or_else(|| String::from("someone"))
 }
 
-fn user_notice(tags: &HashMap<&str, String>) {
+// The viewer's own words come after " :" ("#channel :message"). Most notices have none.
+fn trailing_text(params: &str) -> &str {
+    params
+        .split_once(" :")
+        .map(|(_, text)| text.trim())
+        .unwrap_or("")
+}
+
+// The sender's chat colour ("#rrggbb"), empty when they never picked one.
+fn user_color(tags: &HashMap<&str, String>) -> String {
+    tags.get("color").cloned().unwrap_or_default()
+}
+
+fn user_notice(tags: &HashMap<&str, String>, params: &str) {
     let name = display_name(tags);
+    let plan = tags
+        .get("msg-param-sub-plan")
+        .map(String::as_str)
+        .unwrap_or("");
     match tags.get("msg-id").map(String::as_str) {
-        Some("sub") | Some("resub") => {
-            let months = number(tags, "msg-param-cumulative-months").unwrap_or(1).max(1);
+        Some(id @ ("sub" | "resub")) => {
+            let months = number(tags, "msg-param-cumulative-months")
+                .unwrap_or(1)
+                .max(1);
             twitch::record_event(Slot::Subscriber, &name, Some(months));
+            let kind = if id == "sub" {
+                alerts::SUB
+            } else {
+                alerts::RESUB
+            };
+            alerts::push(
+                kind,
+                &name,
+                Some(months),
+                plan,
+                trailing_text(params),
+                "",
+                &user_color(tags),
+            );
         }
         Some("subgift") => {
             let receiver = tags
                 .get("msg-param-recipient-display-name")
                 .filter(|value| !value.is_empty())
                 .cloned()
-                .unwrap_or(name);
+                .unwrap_or_else(|| name.clone());
             let months = number(tags, "msg-param-months").unwrap_or(1).max(1);
             twitch::record_event(Slot::Subscriber, &receiver, Some(months));
+            // Part of a mass gift: the "submysterygift" notice already made one alert for all of them.
+            let in_mass_gift = tags
+                .get("msg-param-community-gift-id")
+                .map_or(false, |id| !id.is_empty());
+            if !in_mass_gift {
+                alerts::push(
+                    alerts::GIFT,
+                    &name,
+                    Some(1),
+                    plan,
+                    "",
+                    &receiver,
+                    &user_color(tags),
+                );
+            }
+        }
+        Some("submysterygift") => {
+            let count = number(tags, "msg-param-mass-gift-count")
+                .unwrap_or(1)
+                .max(1);
+            alerts::push(
+                alerts::MYSTERY_GIFT,
+                &name,
+                Some(count),
+                plan,
+                "",
+                "",
+                &user_color(tags),
+            );
+        }
+        Some("raid") => {
+            let raider = tags
+                .get("msg-param-displayName")
+                .filter(|value| !value.is_empty())
+                .cloned()
+                .unwrap_or(name);
+            let viewers = number(tags, "msg-param-viewerCount").unwrap_or(0);
+            alerts::push(
+                alerts::RAID,
+                &raider,
+                Some(viewers),
+                "",
+                "",
+                "",
+                &user_color(tags),
+            );
         }
         Some("viewermilestone") => {
             if tags.get("msg-param-category").map(String::as_str) == Some("watch-streak") {
@@ -258,10 +345,20 @@ fn user_notice(tags: &HashMap<&str, String>) {
     }
 }
 
-fn cheer(tags: &HashMap<&str, String>) {
+fn cheer(tags: &HashMap<&str, String>, params: &str) {
     if let Some(bits) = number(tags, "bits") {
         if bits > 0 {
-            twitch::record_event(Slot::Cheer, &display_name(tags), Some(bits));
+            let name = display_name(tags);
+            twitch::record_event(Slot::Cheer, &name, Some(bits));
+            alerts::push(
+                alerts::CHEER,
+                &name,
+                Some(bits),
+                "",
+                trailing_text(params),
+                "",
+                &user_color(tags),
+            );
         }
     }
 }
@@ -338,12 +435,16 @@ fn remove_user(user_id: &str) {
 fn parse_emotes(raw: &str) -> Vec<(String, u64, u64)> {
     let mut out = Vec::new();
     for group in raw.split('/') {
-        let Some((id, ranges)) = group.split_once(':') else { continue };
+        let Some((id, ranges)) = group.split_once(':') else {
+            continue;
+        };
         if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
             continue;
         }
         for range in ranges.split(',') {
-            let Some((start, end)) = range.split_once('-') else { continue };
+            let Some((start, end)) = range.split_once('-') else {
+                continue;
+            };
             if let (Ok(start), Ok(end)) = (start.parse::<u64>(), end.parse::<u64>()) {
                 out.push((id.to_string(), start, end));
             }
@@ -355,7 +456,11 @@ fn parse_emotes(raw: &str) -> Vec<(String, u64, u64)> {
 
 fn parse_badges(raw: &str) -> Vec<(String, String)> {
     let plain = |text: &str| {
-        !text.is_empty() && text.len() <= 40 && text.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        !text.is_empty()
+            && text.len() <= 40
+            && text
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
     };
     raw.split(',')
         .filter_map(|pair| {
@@ -370,13 +475,20 @@ fn parse_badges(raw: &str) -> Vec<(String, String)> {
 }
 
 fn chat_message(tags: &HashMap<&str, String>, prefix: &str, params: &str) {
-    let Some((_, text)) = params.split_once(" :") else { return };
+    let Some((_, text)) = params.split_once(" :") else {
+        return;
+    };
     // "/me waves" arrives as \x01ACTION waves\x01; emote positions count from after "ACTION ".
     let (text, action) = match text.strip_prefix("\u{1}ACTION ") {
         Some(inner) => (inner.trim_end_matches('\u{1}'), true),
         None => (text, false),
     };
-    let login = prefix.trim_start_matches(':').split('!').next().unwrap_or("").to_lowercase();
+    let login = prefix
+        .trim_start_matches(':')
+        .split('!')
+        .next()
+        .unwrap_or("")
+        .to_lowercase();
     if login.is_empty() || text.is_empty() {
         return;
     }
@@ -386,7 +498,11 @@ fn chat_message(tags: &HashMap<&str, String>, prefix: &str, params: &str) {
 
     let color = tags
         .get("color")
-        .filter(|value| value.len() == 7 && value.starts_with('#') && value[1..].chars().all(|c| c.is_ascii_hexdigit()))
+        .filter(|value| {
+            value.len() == 7
+                && value.starts_with('#')
+                && value[1..].chars().all(|c| c.is_ascii_hexdigit())
+        })
         .cloned()
         .unwrap_or_default();
     let line = ChatLine {
