@@ -695,6 +695,8 @@ pub fn register() {
     info.get_width = Some(alerts_get_width);
     info.get_height = Some(alerts_get_height);
 
+    crate::icons::apply(&mut info, crate::icons::Kind::Alerts);
+
     unsafe {
         obs_register_source_s(&info, std::mem::size_of::<obs_source_info>());
     }

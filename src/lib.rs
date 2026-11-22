@@ -56,7 +56,7 @@ pub extern "C" fn obs_module_description() -> *const c_char {
 pub extern "C" fn obs_module_load() -> bool {
     log_info(c"[neko-overlays-plugin] plugin loaded");
     server::start();
-    // icons::install(); // custom source icons crashed OBS 33.0.1, off until the cause is found
+    icons::install();
     info_bar::register();
     chat_overlay::register();
     alerts_overlay::register();

@@ -12,7 +12,8 @@ const DEFAULT_BACKGROUND: i64 = 0xFF14_0026;
 const DEFAULT_ACCENT: i64 = 0xFFC0_A6F1;
 const DEFAULT_TEXT: i64 = 0xFFFC_FFFD;
 
-const BROWSER_CSS: &CStr = c"body { background-color: rgba(0, 0, 0, 0); margin: 0; overflow: hidden; }";
+const BROWSER_CSS: &CStr =
+    c"body { background-color: rgba(0, 0, 0, 0); margin: 0; overflow: hidden; }";
 
 struct InfoBar {
     browser: *mut obs_source_t,
@@ -37,30 +38,67 @@ unsafe fn get_int(settings: *mut obs_data_t, name: &CStr, min: i64, max: i64) ->
 }
 
 fn hex(color: i64) -> String {
-    format!("#{:02x}{:02x}{:02x}", color & 0xff, (color >> 8) & 0xff, (color >> 16) & 0xff)
+    format!(
+        "#{:02x}{:02x}{:02x}",
+        color & 0xff,
+        (color >> 8) & 0xff,
+        (color >> 16) & 0xff
+    )
 }
 
 fn clean_font(name: &str) -> Option<String> {
     let name = name.trim();
-    let plain = !name.is_empty() && name.len() <= 40 && name.chars().all(|c| c.is_ascii_alphanumeric() || c == ' ');
+    let plain = !name.is_empty()
+        && name.len() <= 40
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == ' ');
     plain.then(|| name.to_string())
 }
 
 unsafe fn page_settings(settings: *mut obs_data_t) -> Value {
     let theme = get_str(settings, c"theme");
-    let theme = if THEMES.iter().any(|(id, _)| *id == theme) { theme } else { String::from("classic") };
+    let theme = if THEMES.iter().any(|(id, _)| *id == theme) {
+        theme
+    } else {
+        String::from("classic")
+    };
 
     let mut colors = Map::new();
     if get_bool(settings, c"custom_colors") {
-        colors.insert("accent".into(), json!(hex(obs_data_get_int(settings, c"accent_color".as_ptr()))));
-        colors.insert("background".into(), json!(hex(obs_data_get_int(settings, c"background_color".as_ptr()))));
-        colors.insert("text".into(), json!(hex(obs_data_get_int(settings, c"text_color".as_ptr()))));
-        colors.insert("textAccent".into(), json!(hex(obs_data_get_int(settings, c"text_accent_color".as_ptr()))));
+        colors.insert(
+            "accent".into(),
+            json!(hex(obs_data_get_int(settings, c"accent_color".as_ptr()))),
+        );
+        colors.insert(
+            "background".into(),
+            json!(hex(obs_data_get_int(
+                settings,
+                c"background_color".as_ptr()
+            ))),
+        );
+        colors.insert(
+            "text".into(),
+            json!(hex(obs_data_get_int(settings, c"text_color".as_ptr()))),
+        );
+        colors.insert(
+            "textAccent".into(),
+            json!(hex(obs_data_get_int(
+                settings,
+                c"text_accent_color".as_ptr()
+            ))),
+        );
     }
 
     let font_size = get_int(settings, c"font_size", 0, 96);
-    let font_size = if font_size > 0 { json!(font_size) } else { Value::Null };
-    let train_type = if get_str(settings, c"train_type") == "follower" { "follower" } else { "subscriber" };
+    let font_size = if font_size > 0 {
+        json!(font_size)
+    } else {
+        Value::Null
+    };
+    let train_type = if get_str(settings, c"train_type") == "follower" {
+        "follower"
+    } else {
+        "subscriber"
+    };
 
     json!({
         "theme": theme,
@@ -173,51 +211,148 @@ unsafe extern "C" fn on_disconnect(
 unsafe extern "C" fn bar_get_properties(_data: *mut c_void) -> *mut obs_properties_t {
     let props = obs_properties_create();
 
-    obs_properties_add_button(props, c"connect".as_ptr(), c"Connect to Twitch".as_ptr(), Some(on_connect));
-    obs_properties_add_button(props, c"disconnect".as_ptr(), c"Disconnect from Twitch".as_ptr(), Some(on_disconnect));
-    obs_properties_add_text(props, c"client_id".as_ptr(), c"Twitch Client ID (empty = built-in)".as_ptr(), 0);
+    obs_properties_add_button(
+        props,
+        c"connect".as_ptr(),
+        c"Connect to Twitch".as_ptr(),
+        Some(on_connect),
+    );
+    obs_properties_add_button(
+        props,
+        c"disconnect".as_ptr(),
+        c"Disconnect from Twitch".as_ptr(),
+        Some(on_disconnect),
+    );
+    obs_properties_add_text(
+        props,
+        c"client_id".as_ptr(),
+        c"Twitch Client ID (empty = built-in)".as_ptr(),
+        0,
+    );
 
     let theme = obs_properties_add_list(props, c"theme".as_ptr(), c"Style".as_ptr(), 2, 3);
     for (id, label) in THEMES {
-        let (id, label) = (CString::new(id).unwrap_or_default(), CString::new(label).unwrap_or_default());
+        let (id, label) = (
+            CString::new(id).unwrap_or_default(),
+            CString::new(label).unwrap_or_default(),
+        );
         obs_property_list_add_string(theme, label.as_ptr(), id.as_ptr());
     }
-    obs_properties_add_bool(props, c"custom_colors".as_ptr(), c"Use my own colors (otherwise the style's own)".as_ptr());
-    obs_properties_add_color(props, c"accent_color".as_ptr(), c"Accent (dividers, borders, glow)".as_ptr());
+    obs_properties_add_bool(
+        props,
+        c"custom_colors".as_ptr(),
+        c"Use my own colors (otherwise the style's own)".as_ptr(),
+    );
+    obs_properties_add_color(
+        props,
+        c"accent_color".as_ptr(),
+        c"Accent (dividers, borders, glow)".as_ptr(),
+    );
     obs_properties_add_color(props, c"background_color".as_ptr(), c"Background".as_ptr());
     obs_properties_add_color(props, c"text_color".as_ptr(), c"Text".as_ptr());
-    obs_properties_add_color(props, c"text_accent_color".as_ptr(), c"Highlighted names and numbers".as_ptr());
-    obs_properties_add_text(props, c"font".as_ptr(), c"Font (empty = the style's own)".as_ptr(), 0);
-    obs_properties_add_int(props, c"font_size".as_ptr(), c"Font size in px (0 = the style's own)".as_ptr(), 0, 96, 1);
-    obs_properties_add_bool(props, c"google_fonts".as_ptr(), c"Download Google Fonts when a style or the Font box needs one (once)".as_ptr());
+    obs_properties_add_color(
+        props,
+        c"text_accent_color".as_ptr(),
+        c"Highlighted names and numbers".as_ptr(),
+    );
+    obs_properties_add_text(
+        props,
+        c"font".as_ptr(),
+        c"Font (empty = the style's own)".as_ptr(),
+        0,
+    );
+    obs_properties_add_int(
+        props,
+        c"font_size".as_ptr(),
+        c"Font size in px (0 = the style's own)".as_ptr(),
+        0,
+        96,
+        1,
+    );
+    obs_properties_add_bool(
+        props,
+        c"google_fonts".as_ptr(),
+        c"Download Google Fonts when a style or the Font box needs one (once)".as_ptr(),
+    );
 
-    obs_properties_add_int(props, c"rotate_seconds".as_ptr(), c"Seconds per item".as_ptr(), 2, 120, 1);
-    obs_properties_add_bool(props, c"show_followers".as_ptr(), c"Number: followers".as_ptr());
-    obs_properties_add_bool(props, c"show_subs".as_ptr(), c"Number: subscribers".as_ptr());
+    obs_properties_add_int(
+        props,
+        c"rotate_seconds".as_ptr(),
+        c"Seconds per item".as_ptr(),
+        2,
+        120,
+        1,
+    );
+    obs_properties_add_bool(
+        props,
+        c"show_followers".as_ptr(),
+        c"Number: followers".as_ptr(),
+    );
+    obs_properties_add_bool(
+        props,
+        c"show_subs".as_ptr(),
+        c"Number: subscribers".as_ptr(),
+    );
     obs_properties_add_bool(props, c"show_viewers".as_ptr(), c"Number: viewers".as_ptr());
-    obs_properties_add_bool(props, c"show_latest_follower".as_ptr(), c"Latest follower".as_ptr());
-    obs_properties_add_bool(props, c"show_latest_subscriber".as_ptr(), c"Latest subscriber".as_ptr());
-    obs_properties_add_bool(props, c"show_latest_cheer".as_ptr(), c"Latest cheer".as_ptr());
-    obs_properties_add_bool(props, c"show_latest_streaker".as_ptr(), c"Latest watch streak".as_ptr());
+    obs_properties_add_bool(
+        props,
+        c"show_latest_follower".as_ptr(),
+        c"Latest follower".as_ptr(),
+    );
+    obs_properties_add_bool(
+        props,
+        c"show_latest_subscriber".as_ptr(),
+        c"Latest subscriber".as_ptr(),
+    );
+    obs_properties_add_bool(
+        props,
+        c"show_latest_cheer".as_ptr(),
+        c"Latest cheer".as_ptr(),
+    );
+    obs_properties_add_bool(
+        props,
+        c"show_latest_streaker".as_ptr(),
+        c"Latest watch streak".as_ptr(),
+    );
 
     obs_properties_add_bool(props, c"train_enabled".as_ptr(), c"Train bar".as_ptr());
-    let train = obs_properties_add_list(props, c"train_type".as_ptr(), c"Train counts".as_ptr(), 2, 3);
+    let train = obs_properties_add_list(
+        props,
+        c"train_type".as_ptr(),
+        c"Train counts".as_ptr(),
+        2,
+        3,
+    );
     obs_property_list_add_string(train, c"Subscribers".as_ptr(), c"subscriber".as_ptr());
     obs_property_list_add_string(train, c"Followers".as_ptr(), c"follower".as_ptr());
-    obs_properties_add_int(props, c"train_seconds".as_ptr(), c"Train seconds".as_ptr(), 5, 600, 1);
+    obs_properties_add_int(
+        props,
+        c"train_seconds".as_ptr(),
+        c"Train seconds".as_ptr(),
+        5,
+        600,
+        1,
+    );
 
     obs_properties_add_int(props, c"width".as_ptr(), c"Width".as_ptr(), 100, 4000, 1);
     obs_properties_add_int(props, c"height".as_ptr(), c"Height".as_ptr(), 20, 1000, 1);
     props
 }
 
-unsafe extern "C" fn bar_create(settings: *mut obs_data_t, _source: *mut obs_source_t) -> *mut c_void {
+unsafe extern "C" fn bar_create(
+    settings: *mut obs_data_t,
+    _source: *mut obs_source_t,
+) -> *mut c_void {
     let start = obs_data_create();
     obs_data_set_string(start, c"url".as_ptr(), c"about:blank".as_ptr());
     obs_data_set_int(start, c"width".as_ptr(), 1000);
     obs_data_set_int(start, c"height".as_ptr(), 56);
     obs_data_set_string(start, c"css".as_ptr(), BROWSER_CSS.as_ptr());
-    let browser = obs_source_create_private(c"browser_source".as_ptr(), c"neko-info-bar-browser".as_ptr(), start);
+    let browser = obs_source_create_private(
+        c"browser_source".as_ptr(),
+        c"neko-info-bar-browser".as_ptr(),
+        start,
+    );
     obs_data_release(start);
 
     if browser.is_null() {
@@ -305,6 +440,8 @@ pub fn register() {
     info.video_render = Some(bar_video_render);
     info.get_width = Some(bar_get_width);
     info.get_height = Some(bar_get_height);
+
+    crate::icons::apply(&mut info, crate::icons::Kind::Bar);
 
     unsafe {
         obs_register_source_s(&info, std::mem::size_of::<obs_source_info>());

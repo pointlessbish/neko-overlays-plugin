@@ -14,7 +14,8 @@ const DEFAULT_TEXT: i64 = 0xFFFC_FFFD;
 
 const DEFAULT_BLOCKLIST: &CStr = c"streamelements\nstreamlabs";
 
-const BROWSER_CSS: &CStr = c"body { background-color: rgba(0, 0, 0, 0); margin: 0; overflow: hidden; }";
+const BROWSER_CSS: &CStr =
+    c"body { background-color: rgba(0, 0, 0, 0); margin: 0; overflow: hidden; }";
 
 struct ChatOverlay {
     browser: *mut obs_source_t,
@@ -39,12 +40,19 @@ unsafe fn get_int(settings: *mut obs_data_t, name: &CStr, min: i64, max: i64) ->
 }
 
 fn hex(color: i64) -> String {
-    format!("#{:02x}{:02x}{:02x}", color & 0xff, (color >> 8) & 0xff, (color >> 16) & 0xff)
+    format!(
+        "#{:02x}{:02x}{:02x}",
+        color & 0xff,
+        (color >> 8) & 0xff,
+        (color >> 16) & 0xff
+    )
 }
 
 fn clean_font(name: &str) -> Option<String> {
     let name = name.trim();
-    let plain = !name.is_empty() && name.len() <= 40 && name.chars().all(|c| c.is_ascii_alphanumeric() || c == ' ');
+    let plain = !name.is_empty()
+        && name.len() <= 40
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == ' ');
     plain.then(|| name.to_string())
 }
 
@@ -52,7 +60,9 @@ fn blocklist(text: &str) -> Vec<String> {
     let mut names: Vec<String> = Vec::new();
     for word in text.split(|c: char| c.is_whitespace() || c == ',' || c == ';') {
         let name = word.trim().trim_start_matches('@').to_lowercase();
-        let valid = !name.is_empty() && name.len() <= 25 && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+        let valid = !name.is_empty()
+            && name.len() <= 25
+            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
         if valid && !names.contains(&name) {
             names.push(name);
         }
@@ -62,18 +72,44 @@ fn blocklist(text: &str) -> Vec<String> {
 
 unsafe fn page_settings(settings: *mut obs_data_t) -> Value {
     let theme = get_str(settings, c"theme");
-    let theme = if THEMES.iter().any(|(id, _)| *id == theme) { theme } else { String::from("classic") };
+    let theme = if THEMES.iter().any(|(id, _)| *id == theme) {
+        theme
+    } else {
+        String::from("classic")
+    };
 
     let mut colors = Map::new();
     if get_bool(settings, c"custom_colors") {
-        colors.insert("accent".into(), json!(hex(obs_data_get_int(settings, c"accent_color".as_ptr()))));
-        colors.insert("background".into(), json!(hex(obs_data_get_int(settings, c"background_color".as_ptr()))));
-        colors.insert("text".into(), json!(hex(obs_data_get_int(settings, c"text_color".as_ptr()))));
-        colors.insert("textAccent".into(), json!(hex(obs_data_get_int(settings, c"text_accent_color".as_ptr()))));
+        colors.insert(
+            "accent".into(),
+            json!(hex(obs_data_get_int(settings, c"accent_color".as_ptr()))),
+        );
+        colors.insert(
+            "background".into(),
+            json!(hex(obs_data_get_int(
+                settings,
+                c"background_color".as_ptr()
+            ))),
+        );
+        colors.insert(
+            "text".into(),
+            json!(hex(obs_data_get_int(settings, c"text_color".as_ptr()))),
+        );
+        colors.insert(
+            "textAccent".into(),
+            json!(hex(obs_data_get_int(
+                settings,
+                c"text_accent_color".as_ptr()
+            ))),
+        );
     }
 
     let font_size = get_int(settings, c"font_size", 0, 96);
-    let font_size = if font_size > 0 { json!(font_size) } else { Value::Null };
+    let font_size = if font_size > 0 {
+        json!(font_size)
+    } else {
+        Value::Null
+    };
 
     json!({
         "theme": theme,
@@ -169,43 +205,122 @@ unsafe extern "C" fn on_disconnect(
 unsafe extern "C" fn chat_get_properties(_data: *mut c_void) -> *mut obs_properties_t {
     let props = obs_properties_create();
 
-    obs_properties_add_button(props, c"connect".as_ptr(), c"Connect to Twitch".as_ptr(), Some(on_connect));
-    obs_properties_add_button(props, c"disconnect".as_ptr(), c"Disconnect from Twitch".as_ptr(), Some(on_disconnect));
+    obs_properties_add_button(
+        props,
+        c"connect".as_ptr(),
+        c"Connect to Twitch".as_ptr(),
+        Some(on_connect),
+    );
+    obs_properties_add_button(
+        props,
+        c"disconnect".as_ptr(),
+        c"Disconnect from Twitch".as_ptr(),
+        Some(on_disconnect),
+    );
 
     let theme = obs_properties_add_list(props, c"theme".as_ptr(), c"Style".as_ptr(), 2, 3);
     for (id, label) in THEMES {
-        let (id, label) = (CString::new(id).unwrap_or_default(), CString::new(label).unwrap_or_default());
+        let (id, label) = (
+            CString::new(id).unwrap_or_default(),
+            CString::new(label).unwrap_or_default(),
+        );
         obs_property_list_add_string(theme, label.as_ptr(), id.as_ptr());
     }
-    obs_properties_add_bool(props, c"custom_colors".as_ptr(), c"Use my own colors (otherwise the style's own)".as_ptr());
-    obs_properties_add_color(props, c"accent_color".as_ptr(), c"Accent (borders, glow)".as_ptr());
+    obs_properties_add_bool(
+        props,
+        c"custom_colors".as_ptr(),
+        c"Use my own colors (otherwise the style's own)".as_ptr(),
+    );
+    obs_properties_add_color(
+        props,
+        c"accent_color".as_ptr(),
+        c"Accent (borders, glow)".as_ptr(),
+    );
     obs_properties_add_color(props, c"background_color".as_ptr(), c"Background".as_ptr());
     obs_properties_add_color(props, c"text_color".as_ptr(), c"Text".as_ptr());
-    obs_properties_add_color(props, c"text_accent_color".as_ptr(), c"Names (when Twitch name colors are off)".as_ptr());
-    obs_properties_add_text(props, c"font".as_ptr(), c"Font (empty = the style's own)".as_ptr(), 0);
-    obs_properties_add_int(props, c"font_size".as_ptr(), c"Font size in px (0 = the style's own)".as_ptr(), 0, 96, 1);
-    obs_properties_add_bool(props, c"google_fonts".as_ptr(), c"Download Google Fonts when a style or the Font box needs one (once)".as_ptr());
+    obs_properties_add_color(
+        props,
+        c"text_accent_color".as_ptr(),
+        c"Names (when Twitch name colors are off)".as_ptr(),
+    );
+    obs_properties_add_text(
+        props,
+        c"font".as_ptr(),
+        c"Font (empty = the style's own)".as_ptr(),
+        0,
+    );
+    obs_properties_add_int(
+        props,
+        c"font_size".as_ptr(),
+        c"Font size in px (0 = the style's own)".as_ptr(),
+        0,
+        96,
+        1,
+    );
+    obs_properties_add_bool(
+        props,
+        c"google_fonts".as_ptr(),
+        c"Download Google Fonts when a style or the Font box needs one (once)".as_ptr(),
+    );
 
-    obs_properties_add_int(props, c"max_messages".as_ptr(), c"Messages on screen".as_ptr(), 1, 50, 1);
-    obs_properties_add_int(props, c"lifetime_seconds".as_ptr(), c"Hide a message after this many seconds (0 = keep it until it is pushed out)".as_ptr(), 0, 3600, 1);
-    obs_properties_add_bool(props, c"twitch_colors".as_ptr(), c"Use the viewers' Twitch name colors".as_ptr());
+    obs_properties_add_int(
+        props,
+        c"max_messages".as_ptr(),
+        c"Messages on screen".as_ptr(),
+        1,
+        50,
+        1,
+    );
+    obs_properties_add_int(
+        props,
+        c"lifetime_seconds".as_ptr(),
+        c"Hide a message after this many seconds (0 = keep it until it is pushed out)".as_ptr(),
+        0,
+        3600,
+        1,
+    );
+    obs_properties_add_bool(
+        props,
+        c"twitch_colors".as_ptr(),
+        c"Use the viewers' Twitch name colors".as_ptr(),
+    );
     obs_properties_add_bool(props, c"show_badges".as_ptr(), c"Show badges".as_ptr());
-    obs_properties_add_bool(props, c"show_avatars".as_ptr(), c"Show profile pictures".as_ptr());
-    obs_properties_add_bool(props, c"third_party_emotes".as_ptr(), c"Also show 7TV, BTTV and FrankerFaceZ emotes (Twitch emotes always show)".as_ptr());
-    obs_properties_add_text(props, c"blocklist".as_ptr(), c"Hidden users, one name per line (bots)".as_ptr(), 2);
+    obs_properties_add_bool(
+        props,
+        c"show_avatars".as_ptr(),
+        c"Show profile pictures".as_ptr(),
+    );
+    obs_properties_add_bool(
+        props,
+        c"third_party_emotes".as_ptr(),
+        c"Also show 7TV, BTTV and FrankerFaceZ emotes (Twitch emotes always show)".as_ptr(),
+    );
+    obs_properties_add_text(
+        props,
+        c"blocklist".as_ptr(),
+        c"Hidden users, one name per line (bots)".as_ptr(),
+        2,
+    );
 
     obs_properties_add_int(props, c"width".as_ptr(), c"Width".as_ptr(), 100, 4000, 1);
     obs_properties_add_int(props, c"height".as_ptr(), c"Height".as_ptr(), 20, 4000, 1);
     props
 }
 
-unsafe extern "C" fn chat_create(settings: *mut obs_data_t, _source: *mut obs_source_t) -> *mut c_void {
+unsafe extern "C" fn chat_create(
+    settings: *mut obs_data_t,
+    _source: *mut obs_source_t,
+) -> *mut c_void {
     let start = obs_data_create();
     obs_data_set_string(start, c"url".as_ptr(), c"about:blank".as_ptr());
     obs_data_set_int(start, c"width".as_ptr(), 420);
     obs_data_set_int(start, c"height".as_ptr(), 600);
     obs_data_set_string(start, c"css".as_ptr(), BROWSER_CSS.as_ptr());
-    let browser = obs_source_create_private(c"browser_source".as_ptr(), c"neko-chat-browser".as_ptr(), start);
+    let browser = obs_source_create_private(
+        c"browser_source".as_ptr(),
+        c"neko-chat-browser".as_ptr(),
+        start,
+    );
     obs_data_release(start);
 
     if browser.is_null() {
@@ -291,6 +406,8 @@ pub fn register() {
     info.video_render = Some(chat_video_render);
     info.get_width = Some(chat_get_width);
     info.get_height = Some(chat_get_height);
+
+    crate::icons::apply(&mut info, crate::icons::Kind::Chat);
 
     unsafe {
         obs_register_source_s(&info, std::mem::size_of::<obs_source_info>());

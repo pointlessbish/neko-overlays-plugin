@@ -151,7 +151,7 @@ fn main() {
 
     let mut builder = bindgen::Builder::default()
         .header("wrapper.h")
-        .allowlist_function("obs_.*|gs_.*|blog|bfree")
+        .allowlist_function("obs_.*|gs_.*|blog|bfree|bmalloc")
         .allowlist_type("obs_.*|gs_.*")
         .allowlist_var("LIBOBS_API_.*|OBS_.*|LOG_.*")
         .derive_default(true)
