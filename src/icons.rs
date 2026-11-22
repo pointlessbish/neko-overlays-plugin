@@ -41,6 +41,7 @@ const ALERTS_LIGHT: Icon = Icon {
 
 // OBS_ICON_TYPE_CUSTOM in libobs's enum obs_icon_type (unknown, image, color, slideshow, audio input, audio output, desktop
 // capture, window capture, game capture, camera, text, media, browser, custom): 13.
+// bindgen types C enums as u32 on Linux/macOS but i32 on Windows (MSVC), so the assignment below casts with `as _`.
 const ICON_TYPE_CUSTOM: u32 = 13;
 
 fn write(icon: &Icon) -> Option<CString> {
@@ -127,7 +128,7 @@ pub fn apply(info: &mut obs_source_info, kind: Kind) {
         Kind::Bar => (bar_dark, bar_light),
         Kind::Alerts => (alerts_dark, alerts_light),
     };
-    info.icon_type = ICON_TYPE_CUSTOM;
+    info.icon_type = ICON_TYPE_CUSTOM as _;
     info.get_dark_icon = Some(dark);
     info.get_light_icon = Some(light);
 }
