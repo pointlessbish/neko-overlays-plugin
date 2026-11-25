@@ -19,7 +19,7 @@ permissions:
 env:
   # Oldest OBS you want to support: a plugin built against newer headers than the running OBS can be refused.
   # Override with the "Run workflow" button or the OBS_VERSION repository variable.
-  OBS_VERSION: ${{ inputs.obs_version || vars.OBS_VERSION || '32.2.1' }}
+  OBS_VERSION: ${{ inputs.obs_version || vars.OBS_VERSION || '32.0.0' }}
 
 jobs:
   build:
